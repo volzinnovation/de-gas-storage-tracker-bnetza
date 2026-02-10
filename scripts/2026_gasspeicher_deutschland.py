@@ -42,6 +42,9 @@ SCENARIOS = OrderedDict(
     ]
 )
 
+PROJECTION_SECTION_HEADING = "## Letzte Projektionen"
+DEFAULT_README_PATH = Path(__file__).resolve().parents[1] / "README.md"
+
 
 def normalize_column(name: str) -> str:
     normalized = unicodedata.normalize("NFKD", str(name))
@@ -233,6 +236,95 @@ def print_console_summary(row: Dict[str, object]) -> None:
     print("Analyse: @ProfVolz")
 
 
+def format_number(value: object, decimals: int = 6) -> str:
+    number = float(value)
+    text = f"{number:.{decimals}f}".rstrip("0").rstrip(".")
+    return text if text else "0"
+
+
+def build_projection_block_lines(row: Dict[str, object]) -> list[str]:
+    lines = [
+        "```text",
+        f"Projektion #Gasspeicher DE vom {row['run_date_berlin']}",
+        (
+            f"Fuellstand {format_number(row['current_fill_level_pct'], 4)}% am "
+            f"{row['latest_data_date']}"
+        ),
+        (
+            "Kritisches Minimum "
+            f"{format_number(row['minimum_threshold_pct'], 2)}% "
+            "(Entnahmerate bricht stark ein)"
+        ),
+        "",
+        "Szenarien - Minimum wird erreicht am:",
+        "",
+    ]
+
+    for scenario_key, scenario_label in SCENARIOS.items():
+        target_col = f"{scenario_key}_target_date"
+        rate_col = f"{scenario_key}_rate_pct_per_day"
+        target_date = row[target_col] if row[target_col] else "nicht erreicht (nicht-negative Rate)"
+        rate_text = format_number(row[rate_col], 6)
+        lines.extend(
+            [
+                str(target_date),
+                scenario_label,
+                f"({rate_text}%/Tag)",
+                "",
+            ]
+        )
+
+    if lines[-1] == "":
+        lines.pop()
+    lines.append("```")
+    return lines
+
+
+def update_readme_projection(readme_path: Path, row: Dict[str, object]) -> None:
+    if not readme_path.exists():
+        print(f"[WARN] README not found at {readme_path}; skipping README update.", file=sys.stderr)
+        return
+
+    readme_lines = readme_path.read_text(encoding="utf-8").splitlines()
+
+    heading_idx = None
+    for idx, line in enumerate(readme_lines):
+        if line.strip() == PROJECTION_SECTION_HEADING:
+            heading_idx = idx
+            break
+
+    if heading_idx is None:
+        print(
+            f"[WARN] Heading '{PROJECTION_SECTION_HEADING}' not found; skipping README update.",
+            file=sys.stderr,
+        )
+        return
+
+    start_idx = None
+    end_idx = None
+    for idx in range(heading_idx + 1, len(readme_lines)):
+        if readme_lines[idx].strip() == "```text":
+            start_idx = idx
+            break
+
+    if start_idx is None:
+        print("[WARN] Projection code block start not found; skipping README update.", file=sys.stderr)
+        return
+
+    for idx in range(start_idx + 1, len(readme_lines)):
+        if readme_lines[idx].strip() == "```":
+            end_idx = idx
+            break
+
+    if end_idx is None:
+        print("[WARN] Projection code block end not found; skipping README update.", file=sys.stderr)
+        return
+
+    new_block = build_projection_block_lines(row)
+    updated = readme_lines[:start_idx] + new_block + readme_lines[end_idx + 1 :]
+    readme_path.write_text("\n".join(updated) + "\n", encoding="utf-8")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Compute German gas storage projections and persist outputs."
@@ -267,6 +359,17 @@ def parse_args() -> argparse.Namespace:
         default="projections.csv",
         help="Filename for appended projection history inside --data-dir.",
     )
+    parser.add_argument(
+        "--readme-file",
+        type=Path,
+        default=DEFAULT_README_PATH,
+        help="README that contains the 'Letzte Projektionen' code block to update in-place.",
+    )
+    parser.add_argument(
+        "--skip-readme-update",
+        action="store_true",
+        help="Skip updating README projection block.",
+    )
     return parser.parse_args()
 
 
@@ -285,9 +388,13 @@ def main() -> int:
         source_mode=source_mode,
     )
     append_projection_row(projections_path, row)
+    if not args.skip_readme_update:
+        update_readme_projection(args.readme_file, row)
     print_console_summary(row)
     print(f"\nErgebnis geschrieben nach: {projections_path}")
     print(f"Cache-Datei: {cache_path}")
+    if not args.skip_readme_update:
+        print(f"README aktualisiert: {args.readme_file}")
     return 0
 
 

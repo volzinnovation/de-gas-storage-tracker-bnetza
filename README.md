@@ -13,7 +13,7 @@ Stand aus `data/projections.csv`, letzter Lauf:
 ```text
 Projektion #Gasspeicher DE vom 2026-02-10
 Fuellstand 26.99% am 2026-02-08
-Kritisches Minimum 20.0% (Entnahmerate bricht stark ein)
+Kritisches Minimum 20% (Entnahmerate bricht stark ein)
 
 Szenarien - Minimum wird erreicht am:
 

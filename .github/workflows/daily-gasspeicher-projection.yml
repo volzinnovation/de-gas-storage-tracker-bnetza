@@ -33,7 +33,7 @@ jobs:
 
       - name: Commit data updates
         run: |
-          git add data/bnetza_cache.csv data/projections.csv
+          git add data/bnetza_cache.csv data/projections.csv README.md
           if git diff --cached --quiet; then
             echo "No changes detected."
             exit 0
