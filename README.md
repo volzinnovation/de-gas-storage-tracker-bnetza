@@ -32,6 +32,7 @@ Groesste Entnahme
 2026-02-13
 Pessimistisch (20% mehr Entnahme)
 (-1.248%/Tag)
+```
 
 ## Datenquellen
 
