@@ -2,6 +2,37 @@
 
 Automatisierte Projektion des deutschen Gasspeicherstands auf Basis von Daten der Bundesnetzagentur (BNetzA).
 
+## Letzte Projektionen
+
+Stand aus `data/projections.csv`, letzter Lauf:
+
+```text
+Projektion #Gasspeicher DE vom 2026-02-10
+Fuellstand 26.99% am 2026-02-08
+Kritisches Minimum 20.0% (Entnahmerate bricht stark ein)
+
+Szenarien - Minimum wird erreicht am:
+
+2026-03-11
+Optimistisch (20% weniger Entnahme)
+(-0.224%/Tag)
+
+2026-03-04
+Kleinste Entnahme
+(-0.28%/Tag)
+
+2026-02-17
+Durchschnittliche Entnahme
+(-0.71%/Tag)
+
+2026-02-14
+Groesste Entnahme
+(-1.04%/Tag)
+
+2026-02-13
+Pessimistisch (20% mehr Entnahme)
+(-1.248%/Tag)
+
 ## Datenquellen
 
 - `url_a`: `https://www.bundesnetzagentur.de/_tools/SVG/js2/_functions/csv_export.html?view=renderCSV&id=870304`
@@ -69,38 +100,3 @@ Workflow: `.github/workflows/daily-gasspeicher-projection.yml`
 
 - Der Cron-Trigger ist auf feste GMT+1-Logik ausgelegt (`11:00 UTC`).
 - Wenn stattdessen strikt lokale Zeit `Europe/Berlin` mit Sommerzeit gewuenscht ist, muss der Zeitplan angepasst werden.
-
-## Letzte Projektion (wie im Colab-Stil)
-
-Stand aus `data/projections.csv`, letzter Lauf:
-
-```text
-Projektion #Gasspeicher DE vom 2026-02-10
-Fuellstand 26.99% am 2026-02-08
-Kritisches Minimum 20.0% (Entnahmerate bricht stark ein)
-
-Szenarien - Minimum wird erreicht am:
-
-2026-03-11
-Optimistisch (20% weniger Entnahme)
-(-0.224%/Tag)
-
-2026-03-04
-Kleinste Entnahme
-(-0.28%/Tag)
-
-2026-02-17
-Durchschnittliche Entnahme
-(-0.71%/Tag)
-
-2026-02-14
-Groesste Entnahme
-(-1.04%/Tag)
-
-2026-02-13
-Pessimistisch (20% mehr Entnahme)
-(-1.248%/Tag)
-
-Datenquelle: @bnetza
-Analyse: @ProfVolz
-```
