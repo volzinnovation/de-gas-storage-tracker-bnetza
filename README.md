@@ -93,14 +93,6 @@ Workflow: `.github/workflows/daily-gasspeicher-projection.yml`
 - Fuehrt das Python-Skript aus
 - committed geaenderte `data/bnetza_cache.csv` und `data/projections.csv` automatisch ins Repository
 
-## Eingebaute Verbesserungen
-
-- robustes Caching fuer `url_b` inkl. Offline-Fallback
-- reproduzierbare tabellarische Historie in CSV statt nur Konsolenoutput
-- CLI-Parameter fuer Minimum und Lookback-Window
-- robuste Spaltenerkennung (Umlaute/Spaltenvarianten)
-- automatisches Daily-Run + Versionierung der Daten ueber GitHub Actions
-
 ## Hinweise
 
 - Der Cron-Trigger ist auf feste GMT+1-Logik ausgelegt (`11:00 UTC`).
