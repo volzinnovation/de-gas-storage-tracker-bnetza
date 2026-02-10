@@ -2,6 +2,10 @@
 
 Automatisierte Projektion des deutschen Gasspeicherstands auf Basis von Daten der Bundesnetzagentur (BNetzA).
 
+Human in the loop: Prof. Dr. Raphael Volz (Hochschule Pforzheim) (raphael.volz@hs-pforzheim.de)
+
+Umsetzung: Google Gemini / OpenAI Codex und Github Actions
+
 ## Letzte Projektionen
 
 Stand aus `data/projections.csv`, letzter Lauf:
