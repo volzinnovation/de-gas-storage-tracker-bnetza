@@ -1,0 +1,45 @@
+name: Daily Gasspeicher Projection
+
+on:
+  schedule:
+    # 11:00 UTC == 12:00 GMT+1
+    - cron: "0 11 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  projection:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas requests
+
+      - name: Run projection script
+        run: python scripts/2026_gasspeicher_deutschland.py
+
+      - name: Commit data updates
+        run: |
+          git add data/bnetza_cache.csv data/projections.csv
+          if git diff --cached --quiet; then
+            echo "No changes detected."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(data): update gasspeicher projections ($(date -u +%F))"
+          BRANCH="${GITHUB_REF#refs/heads/}"
+          git push origin "HEAD:${BRANCH}"
