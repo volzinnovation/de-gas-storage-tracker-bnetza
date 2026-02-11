@@ -2,8 +2,8 @@ name: Daily Gasspeicher Projection
 
 on:
   schedule:
-    # 11:00 UTC == 12:00 GMT+1
-    - cron: "0 11 * * *"
+    # 10:00 UTC == 11:00 GMT+1
+    - cron: "0 10 * * *"
   workflow_dispatch:
 
 permissions:
