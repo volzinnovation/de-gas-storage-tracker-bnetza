@@ -27,7 +27,7 @@ Kleinste Entnahme
 
 2026-02-20
 Durchschnittliche Entnahme
-(-0.637917%/Tag)
+(-0.654333%/Tag)
 
 2026-02-18
 Groesste Entnahme
