@@ -89,7 +89,7 @@ python scripts/2026_gasspeicher_deutschland.py --minimum 20 --lookback-days 30
 
 Workflow: `.github/workflows/daily-gasspeicher-projection.yml`
 
-- Zeitplan: taeglich `11:00 UTC` (= `12:00 GMT+1`)
+- Zeitplan: taeglich `9:00 UTC` (= `10:00 GMT+1`)
 - Fuehrt das Python-Skript aus
 - committed geaenderte `data/bnetza_cache.csv` und `data/projections.csv` automatisch ins Repository
 
