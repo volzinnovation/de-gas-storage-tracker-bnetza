@@ -57,6 +57,9 @@ jobs:
       - name: Check dashboard JavaScript syntax
         run: node --check dashboard.js
 
+      - name: Test GIE API failure recovery
+        run: python -m unittest discover -s scripts -p 'test_*.py'
+
       - name: Print projection status
         run: python scripts/projection_status.py --format json
 

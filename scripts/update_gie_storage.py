@@ -18,6 +18,8 @@ import csv
 import datetime as dt
 import os
 import statistics
+import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +34,9 @@ GIE_OUTPUT_PATH = ROOT / "data" / "gie_storage.csv"
 EU_OUTPUT_PATH = ROOT / "data" / "eu_storage.csv"
 DEFAULT_FROM = "2020-01-01"
 DASHBOARD_FROM = "2025-11-01"
+REQUEST_ATTEMPTS = 3
+REQUEST_TIMEOUT = (10, 60)
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 GIE_COLUMNS = [
     "scope",
@@ -69,6 +74,47 @@ def load_api_key() -> str:
     return value
 
 
+def fetch_page(params: dict[str, str], api_key: str) -> dict[str, Any]:
+    """Retry transient failures on the same page without logging credentials."""
+    for attempt in range(1, REQUEST_ATTEMPTS + 1):
+        try:
+            response = requests.get(
+                API_URL,
+                params=params,
+                headers={"x-key": api_key},
+                timeout=REQUEST_TIMEOUT,
+            )
+        except (requests.Timeout, requests.ConnectionError):
+            failure = "GIE API connection failed or timed out."
+        except requests.RequestException:
+            raise RuntimeError("GIE API request failed before receiving a response.") from None
+        else:
+            if response.status_code in RETRYABLE_STATUS_CODES:
+                failure = f"GIE API request failed with HTTP {response.status_code}."
+            elif response.status_code >= 400:
+                raise RuntimeError(f"GIE API request failed with HTTP {response.status_code}.")
+            else:
+                try:
+                    payload = response.json()
+                except ValueError:
+                    raise RuntimeError("GIE API returned invalid JSON.") from None
+                if not isinstance(payload, dict):
+                    raise RuntimeError("GIE API returned an unexpected payload shape.")
+                return payload
+
+        if attempt == REQUEST_ATTEMPTS:
+            raise RuntimeError(f"{failure} Exhausted {REQUEST_ATTEMPTS} attempts.") from None
+        delay = 2 ** attempt
+        print(
+            f"[WARN] {failure} Retrying page {params['page']} "
+            f"in {delay}s (attempt {attempt + 1}/{REQUEST_ATTEMPTS}).",
+            file=sys.stderr,
+        )
+        time.sleep(delay)
+
+    raise RuntimeError("GIE API retry loop ended unexpectedly.")
+
+
 def fetch_dataset(
     selector: dict[str, str],
     api_key: str,
@@ -87,23 +133,7 @@ def fetch_dataset(
             "page": str(page),
             "size": "300",
         }
-        try:
-            response = requests.get(
-                API_URL,
-                params=params,
-                headers={"x-key": api_key},
-                timeout=30,
-            )
-        except requests.RequestException as exc:
-            raise RuntimeError("GIE API request failed before receiving a response.") from exc
-
-        if response.status_code >= 400:
-            raise RuntimeError(f"GIE API request failed with HTTP {response.status_code}.")
-
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise RuntimeError("GIE API returned invalid JSON.") from exc
+        payload = fetch_page(params, api_key)
 
         if payload.get("error"):
             raise RuntimeError("GIE API rejected the request or returned no dataset.")

@@ -32,8 +32,8 @@ python -m http.server 8765
 Stand aus `data/projections.csv`, letzter Lauf:
 
 ```text
-Projektion #Gasspeicher DE vom 2026-09-20
-Fuellstand 56.26% am 2026-09-18
+Projektion #Gasspeicher DE vom 2026-09-22
+Fuellstand 56.84% am 2026-09-20
 Kritisches Minimum 20% (Entnahmerate bricht stark ein)
 
 Szenarien - Minimum wird erreicht am:
@@ -48,7 +48,7 @@ Kleinste Entnahme
 
 nicht erreicht (nicht-negative Rate)
 Durchschnittliche Entnahme
-(0.202333%/Tag)
+(0.213667%/Tag)
 
 nicht erreicht (nicht-negative Rate)
 Groesste Entnahme
@@ -169,6 +169,17 @@ Workflow: `.github/workflows/daily-gasspeicher-projection.yml`
 Der API-Schluessel wird lokal nur in `.secrets/gie_api_key` gelesen; der Ordner
 ist durch `.gitignore` vom Repository ausgeschlossen. In GitHub Actions wird
 derselbe Wert ausschließlich als Secret `GIE_API_KEY` injiziert.
+
+Der GIE-Abruf verwendet pro Seite einen Verbindungs-Timeout von 10 Sekunden
+und einen Lese-Timeout von 60 Sekunden. Bei Verbindungsfehlern, Timeouts oder
+HTTP 429/500/502/503/504 folgen bis zu zwei Wiederholungen nach 2 bzw. 4 Sekunden.
+Scheitert der Abruf weiterhin, bleibt der Lauf sichtbar fehlgeschlagen; die
+bisherigen GIE-Dateien werden erst nach erfolgreichem Abruf beider Serien ersetzt.
+Die Fehlerbehandlung wird ohne Netzwerkzugriff getestet:
+
+```bash
+python -m unittest discover -s scripts -p 'test_*.py'
+```
 
 ## Hinweise
 
