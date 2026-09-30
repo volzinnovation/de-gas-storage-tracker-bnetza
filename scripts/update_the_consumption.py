@@ -11,7 +11,7 @@ dokumentierte XML-Schnittstelle, ohne Zugangsschluessel:
         ?startDate=yyyy-mm-dd&endDate=yyyy-mm-dd
 
     Doku: https://api.tradinghub.eu/api/dataexport/manual/de
-    Uebersicht: https://www.tradinghub.eu/de-de/Veroeffentlichungen/Transparenz/
+    Uebersicht: https://www.tradinghub.eu/de-de/Veroeffentlichungen/Weitere-Veroeffentlichungen/
                 Aggregierte-Verbrauchsdaten
 
 Die Schnittstelle verlangt einen aussagekraeftigen User-Agent.
@@ -55,6 +55,8 @@ import argparse
 import csv
 import datetime as dt
 import sys
+import tempfile
+from zoneinfo import ZoneInfo
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -80,6 +82,8 @@ SOURCE_LABEL = "Trading Hub Europe AggregatedConsumptionData"
 FIRST_GASDAY = dt.date(2018, 1, 1)
 # In Scheiben abrufen, damit einzelne Anfragen klein bleiben.
 CHUNK_DAYS = 366
+# Ein Tag Publikationsverzug plus ein Tag Toleranz fuer den Morgenlauf.
+MAX_DATA_AGE_DAYS = 2
 
 
 def fetch(start: dt.date, end: dt.date, timeout: int = 60) -> bytes:
@@ -93,43 +97,59 @@ def fetch(start: dt.date, end: dt.date, timeout: int = 60) -> bytes:
 
 
 def parse(payload: bytes) -> list[dict]:
-    """XML in Zeilen umwandeln. Fehlende Einzelmengen zaehlen als 0."""
-    text = payload.decode("utf-8-sig", errors="replace")
+    """Neues XML und alte SQL-Namespaces lesen; fehlend ist niemals Null."""
+    text = payload.decode("utf-8-sig")
     marker = text.find("<AggregatedConsumptionData")
     if marker < 0:
         raise ValueError("Antwort enthaelt kein AggregatedConsumptionData-Element.")
     root = ET.fromstring(text[marker:])
+    if root.tag != REPORT_ID:
+        raise ValueError("Unerwartetes XML-Wurzelelement.")
 
     rows: list[dict] = []
+    seen: set[str] = set()
     for record in root:
         namespace = NS if record.tag == f"{NS}{REPORT_ID}" else ""
         if record.tag != f"{namespace}{REPORT_ID}":
-            continue
-        gasday = record.find(f"{namespace}Gasday")
-        if gasday is None or not gasday.text:
-            continue
+            raise ValueError(f"Unerwartetes XML-Element: {record.tag}")
 
-        def amount(field: str) -> int:
-            node = record.find(f"{namespace}{field}")
-            return int(node.text) if node is not None and node.text else 0
+        def field_text(field: str) -> str:
+            nodes = record.findall(f"{namespace}{field}")
+            if len(nodes) != 1 or not nodes[0].text or not nodes[0].text.strip():
+                raise ValueError(f"Fehlendes, leeres oder doppeltes Feld: {field}")
+            return nodes[0].text.strip()
 
-        unit = record.find(f"{namespace}Unit")
-        if unit is not None and unit.text and unit.text.strip().lower() != "kwh":
-            raise ValueError(f"Unerwartete Einheit: {unit.text!r} (erwartet kWh)")
-
-        slp = sum(amount(f) for f in SLP_FIELDS) / 1e6
-        rlm = sum(amount(f) for f in RLM_FIELDS) / 1e6
-        status = record.find(f"{namespace}Status")
-        rows.append(
-            {
-                "date": gasday.text.strip()[:10],
-                "consumption_gwh": f"{slp + rlm:.3f}",
-                "slp_gwh": f"{slp:.3f}",
-                "rlm_gwh": f"{rlm:.3f}",
-                "status": status.text.strip() if status is not None and status.text else "",
-                "source": SOURCE_LABEL,
-            }
-        )
+        raw_date = field_text("Gasday")
+        # Beide API-Generationen liefern ISO-Datum bzw. ISO-Zeitstempel.
+        gasday = dt.datetime.fromisoformat(raw_date).date()
+        date = gasday.isoformat()
+        if date in seen:
+            raise ValueError(f"Doppelter Gastag: {date}")
+        seen.add(date)
+        unit = field_text("Unit")
+        if unit.lower() != "kwh":
+            raise ValueError(f"{date}: Unerwartete Einheit: {unit!r} (erwartet kWh)")
+        amounts = {}
+        for field in SLP_FIELDS + RLM_FIELDS:
+            value = field_text(field)
+            if not value.isascii() or not value.isdecimal():
+                raise ValueError(f"{date}: Ungueltige nichtnegative ganze Menge in {field}: {value!r}")
+            amounts[field] = int(value)
+        status = field_text("Status")
+        if status not in {"preliminary", "final", "corrected"}:
+            raise ValueError(f"{date}: Unbekannter Status: {status!r}")
+        slp_kwh = sum(amounts[f] for f in SLP_FIELDS)
+        rlm_kwh = sum(amounts[f] for f in RLM_FIELDS)
+        rows.append({
+            "date": date,
+            "consumption_gwh": f"{(slp_kwh + rlm_kwh) / 1e6:.3f}",
+            "slp_gwh": f"{slp_kwh / 1e6:.3f}",
+            "rlm_gwh": f"{rlm_kwh / 1e6:.3f}",
+            "status": status,
+            "source": SOURCE_LABEL,
+            # Vor Rundung pruefen: kleine positive Mengen sind keine Null.
+            "_rlm_zero": rlm_kwh == 0,
+        })
     return rows
 
 
@@ -141,12 +161,43 @@ def load_existing() -> dict[str, dict]:
 
 
 def write(rows: dict[str, dict]) -> None:
+    """Erst vollstaendig schreiben, dann auf demselben Dateisystem ersetzen."""
     TARGET.parent.mkdir(parents=True, exist_ok=True)
-    with TARGET.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=COLUMNS)
-        writer.writeheader()
-        for date in sorted(rows):
-            writer.writerow({key: rows[date].get(key, "") for key in COLUMNS})
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", newline="", encoding="utf-8", dir=TARGET.parent,
+            prefix=f".{TARGET.name}.", suffix=".tmp", delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            writer = csv.DictWriter(handle, fieldnames=COLUMNS)
+            writer.writeheader()
+            for date in sorted(rows):
+                writer.writerow({key: rows[date].get(key, "") for key in COLUMNS})
+        temporary.replace(TARGET)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def today_in_berlin() -> dt.date:
+    return dt.datetime.now(ZoneInfo("Europe/Berlin")).date()
+
+
+def validate_coverage(rows: dict[str, dict], start: dt.date, today: dt.date,
+                      max_data_age_days: int) -> None:
+    """Frische und Luecken am Abruf pruefen, niemals mit Cache kaschieren."""
+    if not rows:
+        raise ValueError("Keine vollstaendigen Verbrauchsdaten erhalten.")
+    latest = dt.date.fromisoformat(max(rows))
+    required = today - dt.timedelta(days=max_data_age_days)
+    if latest < required:
+        raise ValueError(f"Veralteter Datenstand: {latest}; erwartet mindestens {required}.")
+    day = start
+    while day <= latest:
+        if day.isoformat() not in rows:
+            raise ValueError(f"Gastag fehlt im Abruf: {day}")
+        day += dt.timedelta(days=1)
 
 
 def spans(start: dt.date, end: dt.date):
@@ -169,10 +220,16 @@ def main() -> int:
         default=45,
         help="wie viele Tage rueckwirkend erneuert werden (Korrekturen nachziehen)",
     )
+    parser.add_argument(
+        "--max-data-age-days", type=int, default=MAX_DATA_AGE_DAYS,
+        help="maximales Alter des letzten vollstaendigen Gastags (Vorgabe 2)",
+    )
     args = parser.parse_args()
+    if args.refresh_days < 1 or args.max_data_age_days < 1:
+        parser.error("--refresh-days und --max-data-age-days muessen positiv sein")
 
     existing = load_existing()
-    heute = dt.date.today()
+    heute = today_in_berlin()
 
     if args.full or not existing:
         start = FIRST_GASDAY
@@ -181,27 +238,52 @@ def main() -> int:
         start = min(letzter, heute) - dt.timedelta(days=args.refresh_days)
         start = max(start, FIRST_GASDAY)
 
-    neu = 0
+    fetched: dict[str, dict] = {}
+    provisional: set[str] = set()
     for von, bis in spans(start, heute):
         try:
             rows = parse(fetch(von, bis))
-            if not rows:
-                raise ValueError("Keine Verbrauchsdaten im angefragten Zeitraum erhalten.")
-        except (urllib.error.URLError, TimeoutError, ValueError, ET.ParseError) as fehler:
+            for row in rows:
+                date = row["date"]
+                if not von <= dt.date.fromisoformat(date) <= bis:
+                    raise ValueError(f"Gastag ausserhalb des Abrufzeitraums: {date}")
+                # THE publiziert SLP fuer den Folgetag, RLM fuer den Vortag.
+                # Nur heutige vorlaeufige Null-RLM-Werte sind daher noch kein
+                # vollstaendiger Tagesverbrauch. Historische Nullen bleiben.
+                if date == heute.isoformat() and row["status"] == "preliminary" and row["_rlm_zero"]:
+                    provisional.add(date)
+                    print(f"{date}: vorlaeufiger Gastag ohne RLM ausgelassen.", file=sys.stderr)
+                else:
+                    fetched[date] = row
+        except (urllib.error.URLError, OSError, ValueError, ET.ParseError) as fehler:
             print(f"Abruf {von}..{bis} fehlgeschlagen: {fehler}", file=sys.stderr)
             return 1
-        for row in rows:
-            existing[row["date"]] = row
-            neu += 1
 
-    if not existing:
-        print("Keine Daten erhalten.", file=sys.stderr)
+    try:
+        # Leere Bereiche vor Beginn der Quellhistorie sind erlaubt. Sobald
+        # Historie bekannt ist, sind fehlende Tage hingegen ein Fehler.
+        history = existing or fetched
+        coverage_start = max(start, dt.date.fromisoformat(min(history))) if history else start
+        validate_coverage(fetched, coverage_start, heute, args.max_data_age_days)
+        unexplained_tail = {date for date in existing if date > max(fetched)} - provisional
+        if unexplained_tail:
+            raise ValueError(f"Bekannte neuere Gastage fehlen in der Quelle: {sorted(unexplained_tail)}")
+        for date in provisional:
+            old = existing.get(date)
+            if old and (old["status"] != "preliminary" or float(old["rlm_gwh"]) != 0):
+                raise ValueError(f"{date}: Vorlaeufige Meldung wuerde vorhandenen RLM-Verbrauch entfernen.")
+        # Nur erfolgreich bestaetigte SLP-only Randtage alter Importversionen
+        # entfernen; bei irgendeinem Fehler bleibt die Datei unveraendert.
+        for date in provisional:
+            existing.pop(date, None)
+        existing.update(fetched)
+        write(existing)
+    except (OSError, ValueError) as fehler:
+        print(f"Validierung/Schreiben fehlgeschlagen: {fehler}", file=sys.stderr)
         return 1
-
-    write(existing)
     print(
-        f"{len(existing)} Gastage in {TARGET.relative_to(ROOT)} "
-        f"({min(existing)} bis {max(existing)}), {neu} Zeilen aktualisiert. "
+        f"{len(existing)} Gastage in {TARGET} "
+        f"({min(existing)} bis {max(existing)}), {len(fetched)} Zeilen aktualisiert. "
         f"Datenalter: {(heute - dt.date.fromisoformat(max(existing))).days} Tage."
     )
     return 0
