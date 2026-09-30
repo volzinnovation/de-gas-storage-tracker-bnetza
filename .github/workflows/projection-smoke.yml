@@ -12,6 +12,8 @@ on:
       - "data/projections.csv"
       - "data/eu_storage.csv"
       - "data/gie_storage.csv"
+      - "data/de_consumption_daily.csv"
+      - ".github/workflows/theconsumption.yml"
       - "requirements.txt"
       - ".github/workflows/daily-gasspeicher-projection.yml"
       - ".github/workflows/pages.yml"
@@ -52,12 +54,13 @@ jobs:
             scripts/2026_gasspeicher_deutschland.py \
             scripts/projection_status.py \
             scripts/validate_dashboard.py \
-            scripts/update_gie_storage.py
+            scripts/update_gie_storage.py \
+            scripts/update_the_consumption.py
 
       - name: Check dashboard JavaScript syntax
         run: node --check dashboard.js
 
-      - name: Test GIE API failure recovery
+      - name: Test GIE and THE API validation
         run: python -m unittest discover -s scripts -p 'test_*.py'
 
       - name: Print projection status

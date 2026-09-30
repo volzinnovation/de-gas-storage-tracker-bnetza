@@ -185,3 +185,39 @@ python -m unittest discover -s scripts -p 'test_*.py'
 
 - Der Cron-Trigger ist auf feste GMT+1-Logik ausgelegt (`11:00 UTC`).
 - Wenn stattdessen strikt lokale Zeit `Europe/Berlin` mit Sommerzeit gewuenscht ist, muss der Zeitplan angepasst werden.
+
+### Validierung des THE-Tagesverbrauchs
+
+`scripts/update_the_consumption.py` verwendet die XML-API unter
+`https://api.tradinghub.eu/api/dataexport/xmlexport/AggregatedConsumptionData`
+mit `startDate` und `endDate` im Format `yyyy-mm-dd`. Neue XML-Antworten ohne
+Namespace und das bisherige SQL-Rowset-Format werden getestet. Jede Zeile muss
+Datum, Status, Einheit `kWh` und alle acht nichtnegativen ganzzahligen Mengen
+enthalten. Fehlende oder leere Mengen werden nicht als Null interpretiert.
+
+THE [veroeffentlicht SLP fuer den Folgetag, RLM fuer den Vortag](https://www.tradinghub.eu/de-de/Ver%C3%B6ffentlichungen/Weitere-Ver%C3%B6ffentlichungen/Aggregierte-Verbrauchsdaten).
+Darum wird eine vorlaeufige Zeile des aktuellen Berliner Kalendertags mit vier
+expliziten RLM-Nullwerten noch nicht als vollstaendiger Tagesverbrauch gespeichert.
+Ein solcher bereits gespeicherter SLP-only Randtag wird nach erfolgreicher
+Validierung entfernt; vorhandene finale oder nicht-null RLM-Daten werden dabei
+nicht geloescht (der Lauf schlaegt stattdessen fehl). Historische Nullwerte bleiben
+gueltig. Diese konservative Regel betrifft nur den aktuellen Tag, nicht pauschal
+alle vorlaeufigen oder kleinen Werte.
+
+Der frische Abruf selbst muss lueckenlos ab dem angefragten, bereits bekannten
+Historienbeginn sein. Bei erstmaligem Vollabruf sind leere Zeitraeume vor der
+ersten gelieferten Zeile erlaubt. Der letzte vollstaendige Gastag darf hoechstens
+zwei Tage alt sein (`--max-data-age-days`, Mindestwert 1); dies toleriert einen
+zusaetzlichen Tag Publikationsverzug. Die Pruefung verwendet `Europe/Berlin`.
+Ein neuerer Cache darf weder fehlende Tage noch einen veralteten Abruf verdecken.
+Doppelte Tage, Daten ausserhalb des angefragten Zeitraums (auch unerwartete
+Folgetags-SLP-Zeilen), falsche Einheiten und Abruf-/XML-Fehler brechen mit Exitcode 1
+ab. Erst wenn alle Teilabrufe und Pruefungen erfolgreich sind, wird die CSV ueber
+eine temporaere Datei im selben Verzeichnis atomar ersetzt. Bei Fehlern bleibt
+die bisherige Datei unveraendert.
+
+Die oben genannten Offline-Tests umfassen THE und GIE; gezielt nur THE:
+
+```bash
+python -m unittest discover -s scripts -p 'test_update_the_consumption.py'
+```
