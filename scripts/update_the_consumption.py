@@ -7,10 +7,10 @@ Trading Hub Europe (THE) veroeffentlicht die aggregierten Allokationsmengen
 aller Entnahmestellen im deutschen Marktgebiet je Gastag. Abruf ueber die
 dokumentierte XML-Schnittstelle, ohne Zugangsschluessel:
 
-    https://datenservice.tradinghub.eu/XmlInterface/getXML.ashx
-        ?ReportId=AggregatedConsumptionData&Start=dd-mm-yyyy&End=dd-mm-yyyy
+    https://api.tradinghub.eu/api/dataexport/xmlexport/AggregatedConsumptionData
+        ?startDate=yyyy-mm-dd&endDate=yyyy-mm-dd
 
-    Doku: https://www.tradinghub.eu/Portals/0/The_XML_Interface_V2.0_de.pdf
+    Doku: https://api.tradinghub.eu/api/dataexport/manual/de
     Uebersicht: https://www.tradinghub.eu/de-de/Veroeffentlichungen/Transparenz/
                 Aggregierte-Verbrauchsdaten
 
@@ -60,7 +60,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-ENDPOINT = "https://datenservice.tradinghub.eu/XmlInterface/getXML.ashx"
+ENDPOINT = "https://api.tradinghub.eu/api/dataexport/xmlexport/AggregatedConsumptionData"
 REPORT_ID = "AggregatedConsumptionData"
 NS = "{urn:schemas-microsoft-com:sql:SqlRowSet1}"
 USER_AGENT = (
@@ -83,10 +83,9 @@ CHUNK_DAYS = 366
 
 
 def fetch(start: dt.date, end: dt.date, timeout: int = 60) -> bytes:
-    """Einen Zeitraum abrufen. Datumsformat der Schnittstelle ist dd-mm-yyyy."""
+    """Einen Zeitraum abrufen. Datumsformat der Schnittstelle ist yyyy-mm-dd."""
     query = (
-        f"{ENDPOINT}?ReportId={REPORT_ID}"
-        f"&Start={start:%d-%m-%Y}&End={end:%d-%m-%Y}"
+        f"{ENDPOINT}?startDate={start.isoformat()}&endDate={end.isoformat()}"
     )
     request = urllib.request.Request(query, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -96,28 +95,31 @@ def fetch(start: dt.date, end: dt.date, timeout: int = 60) -> bytes:
 def parse(payload: bytes) -> list[dict]:
     """XML in Zeilen umwandeln. Fehlende Einzelmengen zaehlen als 0."""
     text = payload.decode("utf-8-sig", errors="replace")
-    marker = text.find("<AggregatedConsumptionData>")
+    marker = text.find("<AggregatedConsumptionData")
     if marker < 0:
         raise ValueError("Antwort enthaelt kein AggregatedConsumptionData-Element.")
     root = ET.fromstring(text[marker:])
 
     rows: list[dict] = []
-    for record in root.findall(f"{NS}{REPORT_ID}"):
-        gasday = record.find(f"{NS}Gasday")
+    for record in root:
+        namespace = NS if record.tag == f"{NS}{REPORT_ID}" else ""
+        if record.tag != f"{namespace}{REPORT_ID}":
+            continue
+        gasday = record.find(f"{namespace}Gasday")
         if gasday is None or not gasday.text:
             continue
 
         def amount(field: str) -> int:
-            node = record.find(f"{NS}{field}")
+            node = record.find(f"{namespace}{field}")
             return int(node.text) if node is not None and node.text else 0
 
-        unit = record.find(f"{NS}Unit")
+        unit = record.find(f"{namespace}Unit")
         if unit is not None and unit.text and unit.text.strip().lower() != "kwh":
             raise ValueError(f"Unerwartete Einheit: {unit.text!r} (erwartet kWh)")
 
         slp = sum(amount(f) for f in SLP_FIELDS) / 1e6
         rlm = sum(amount(f) for f in RLM_FIELDS) / 1e6
-        status = record.find(f"{NS}Status")
+        status = record.find(f"{namespace}Status")
         rows.append(
             {
                 "date": gasday.text.strip()[:10],
@@ -183,11 +185,11 @@ def main() -> int:
     for von, bis in spans(start, heute):
         try:
             rows = parse(fetch(von, bis))
-        except (urllib.error.URLError, TimeoutError, ValueError) as fehler:
+            if not rows:
+                raise ValueError("Keine Verbrauchsdaten im angefragten Zeitraum erhalten.")
+        except (urllib.error.URLError, TimeoutError, ValueError, ET.ParseError) as fehler:
             print(f"Abruf {von}..{bis} fehlgeschlagen: {fehler}", file=sys.stderr)
-            if not existing:
-                return 1
-            continue
+            return 1
         for row in rows:
             existing[row["date"]] = row
             neu += 1
@@ -199,7 +201,8 @@ def main() -> int:
     write(existing)
     print(
         f"{len(existing)} Gastage in {TARGET.relative_to(ROOT)} "
-        f"({min(existing)} bis {max(existing)}), {neu} Zeilen aktualisiert."
+        f"({min(existing)} bis {max(existing)}), {neu} Zeilen aktualisiert. "
+        f"Datenalter: {(heute - dt.date.fromisoformat(max(existing))).days} Tage."
     )
     return 0
 

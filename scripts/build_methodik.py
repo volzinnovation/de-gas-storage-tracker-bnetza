@@ -337,8 +337,8 @@ s += [Paragraph("2.2 · Tagesverbrauch: Trading Hub Europe", H3), Paragraph(
   "aggregierten Allokationsmengen aller Entnahmestellen im deutschen Marktgebiet — je Gastag, "
   "getrennt nach Gasqualität (H/L) und Abrechnungsart. Der Abruf läuft über die dokumentierte "
   "XML-Schnittstelle ohne Zugangsschlüssel; ein aussagekräftiger User-Agent ist Pflicht.", P),
-  formel("https://datenservice.tradinghub.eu/XmlInterface/getXML.ashx<br/>"
-         "&nbsp;&nbsp;&nbsp;&nbsp;?ReportId=AggregatedConsumptionData&amp;Start=dd-mm-yyyy&amp;End=dd-mm-yyyy")]
+  formel("https://api.tradinghub.eu/api/dataexport/xmlexport/AggregatedConsumptionData<br/>"
+         "&nbsp;&nbsp;&nbsp;&nbsp;?startDate=yyyy-mm-dd&amp;endDate=yyyy-mm-dd")]
 
 s += [Spacer(1, 6), Paragraph("Die acht Mengenfelder werden zu zwei Sektoren summiert:", P),
   formel("SLP = HGasSLPsyn + HGasSLPana + LGasSLPsyn + LGasSLPana<br/>"
