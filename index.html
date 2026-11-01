@@ -71,7 +71,7 @@
             <h2 id="eu-title">EU-Gasspeicher · saisonale Projektion</h2>
           </div>
           <p id="eu-description">
-            Aktueller Füllstand, 5-Jahres-Norm und saisonale Fortschreibung des jüngsten 30-Tage-Tempos.
+            Aktueller Füllstand, 5-Jahres-Norm und Projektion bei letztjährigem Verlauf.
           </p>
         </div>
 
@@ -107,7 +107,7 @@
 
           <div class="eu-trajectory-footer">
             <span>
-              Tempo im jüngsten Fenster: <strong id="eu-recent-rate">--</strong>
+              Ø Tagesänderung im Vorjahresverlauf: <strong id="eu-recent-rate">--</strong>
               · mindestens bis zum Ziel: <strong id="eu-required-rate">--</strong>
             </span>
             <span>
@@ -118,7 +118,7 @@
             Primärquelle: <a href="https://agsi.gie.eu/" target="_blank" rel="noreferrer">GIE AGSI+ API</a>
             (direkter Abruf, API v013; <a href="https://www.gie.eu/transparency-platform/GIE_API_documentation_v013.pdf" target="_blank" rel="noreferrer">Dokumentation</a>).
             Kontext und Trajektorie: <a href="https://global-energy-flow.com/storage/trajectory/" target="_blank" rel="noreferrer">Global Energy Flow</a>.
-            Die gestrichelte Linie ist ein Szenario auf Basis der Messpunkte im letzten 30-Tage-Fenster, keine Garantie.
+            Die gestrichelte Linie wendet die täglichen Füllstandsänderungen des Vorjahres auf den aktuellen Datenstand an. Sie ist ein Szenario, keine Garantie.
           </p>
         </div>
       </section>
@@ -130,7 +130,7 @@
             <h2 id="de-title">Deutsche Gasspeicher · saisonale Projektion</h2>
           </div>
           <p id="de-description">
-            Aktueller Füllstand, 5-Jahres-Norm und saisonale Fortschreibung des jüngsten 30-Tage-Tempos.
+            Aktueller Füllstand, 5-Jahres-Norm und Projektion bei letztjährigem Verlauf.
           </p>
         </div>
         <div class="eu-trajectory-panel">
@@ -172,7 +172,7 @@
 
           <div class="eu-trajectory-footer">
             <span>
-              Tempo im jüngsten Fenster: <strong id="de-recent-rate">--</strong>
+              Ø Tagesänderung im Vorjahresverlauf: <strong id="de-recent-rate">--</strong>
               · mindestens bis zum Ziel: <strong id="de-required-rate">--</strong>
             </span>
             <span>
@@ -182,7 +182,7 @@
           <p class="eu-source-note">
             Primärquelle: <a href="https://agsi.gie.eu/" target="_blank" rel="noreferrer">GIE AGSI+ API</a>
             (direkter Deutschland-Abruf, API v013; <a href="https://www.gie.eu/transparency-platform/GIE_API_documentation_v013.pdf" target="_blank" rel="noreferrer">Dokumentation</a>).
-            Die gestrichelte Linie basiert auf den deutschen GIE-Messpunkten der letzten 30 Tage und ist keine Garantie.
+            Die gestrichelte Linie wendet die täglichen deutschen Füllstandsänderungen des Vorjahres auf den aktuellen Datenstand an. Sie ist ein Szenario, keine Garantie.
           </p>
         </div>
       </section>
@@ -260,8 +260,8 @@
       </footer>
     </main>
 
-    <script src="projection.js?v=20261101-seasonal"></script>
-    <script src="dashboard.js?v=20261101-seasonal"></script>
+    <script src="projection.js?v=20261101-prior-year"></script>
+    <script src="dashboard.js?v=20261101-prior-year"></script>
     <script src="flowlab.js?v=20261101-seasonal"></script>
   </body>
 </html>

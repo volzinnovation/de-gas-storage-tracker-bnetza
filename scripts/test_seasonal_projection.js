@@ -147,6 +147,13 @@ async function dashboardAt(timestamp, dataDate = "2026-10-30", options = {}) {
   const earlier = projection.addDays(dataDate, -30);
   const gie = ["scope,date,fill_pct,norm_5y_fill_pct,source"];
   for (const scope of ["EU", "DE"]) {
+    // Keep the entire historical series: the chart needs the same calendar
+    // dates a year earlier, including dates beyond its visible history window.
+    for (let day = `${Number(dataDate.slice(0, 4)) - 1}-01-01`; day < earlier; day = projection.addDays(day, 1)) {
+      if (options.omitHistoryDate === day) continue;
+      const historicalFill = options.historicalFill?.(scope, day) ?? 50;
+      gie.push(`${scope},${day},${historicalFill},${norm},GIE AGSI+ API v013`);
+    }
     gie.push(`${scope},${earlier},${earlierFill},${norm},GIE AGSI+ API v013`);
     gie.push(`${scope},${dataDate},${fill},${norm},GIE AGSI+ API v013`);
   }
@@ -238,11 +245,11 @@ test("already reached thresholds do not produce negative durations", async () =>
   }
 });
 
-test("trajectory, custom scenario and automatic scenarios clamp to the same physical bounds", async () => {
+test("the historical chart remains independent of linear custom and automatic scenarios", async () => {
   for (const [earlierFill, expected, tone] of [[20, 100, "ok"], [80, 0, "danger"]]) {
     const { context, element, state } = await dashboardAt("2026-11-01T12:00:00Z", "2026-10-30", { earlierFill });
-    assert.equal(state.deProjection.projected, expected);
-    assert.equal(state.euProjection.projected, expected);
+    assert.equal(state.deProjection.projected, 50, "flat prior-year deltas leave today's basis unchanged");
+    assert.equal(state.euProjection.projected, 50);
     element("rate-slider").value = String(state.deProjection.rate);
     context.renderCustomScenario();
     assert.equal(element("custom-outcome").dataset.tone, tone);
@@ -303,9 +310,61 @@ test("the custom lab preserves the exact measured rate rather than quantizing it
   });
   assert.equal(Number(element("rate-slider").value), state.deProjection.rate);
   assert.notEqual(state.deProjection.rate, Number(state.deProjection.rate.toFixed(2)));
-  assert.match(element("custom-detail").textContent, new RegExp(`${state.deProjection.projected.toFixed(2).replace(".", "\\.")}%`));
+  const linear = projection.project(state.latest.current_fill_level_pct, state.deProjection.rate, state.latest.latest_data_date, state.target);
+  assert.match(element("custom-detail").textContent, new RegExp(`${linear.projected.toFixed(2).replace(".", "\\.")}%`));
   const html = readFileSync(path.join(ROOT, "index.html"), "utf8");
   const slider = html.match(/<input\b[^>]*\bid="rate-slider"[^>]*>/s)?.[0];
   assert.ok(slider, "the custom rate slider should exist");
   assert.match(slider, /\bstep="any"/, "the browser must keep the measured rate precision");
+});
+
+test("both chart paths and copied summaries use prior-year daily changes and revised wording", async () => {
+  const { context, element, state } = await dashboardAt("2026-11-01T12:00:00Z", "2026-10-30", {
+    earlierFill: 20,
+    historicalFill(scope, day) {
+      // Uneven first changes and a distinct regional path, without any recent
+      // trend change, make a two-point straight-line implementation fail.
+      const changes = { "2025-10-30": 80, "2025-10-31": 79, "2025-11-01": 77 };
+      if (day < "2025-10-30") return 80;
+      return (changes[day] ?? 75) + (scope === "EU" && day > "2025-10-30" ? 2 : 0);
+    },
+  });
+  assert.equal(state.deProjection.projected, 45);
+  assert.equal(state.euProjection.projected, 47);
+  for (const scope of ["de", "eu"]) {
+    assert.match(element(`${scope}-projection-status`).textContent, /bei letztjährigem Verlauf/);
+    assert.doesNotMatch(element(`${scope}-projection-status`).textContent, /bei aktuellem Tempo/);
+    assert.ok(state[`${scope}Projection`].points.length > 100, "the prediction retains every daily point");
+    const markup = element(`${scope}-chart`).innerHTML;
+    const line = markup.match(/class="eu-projection" points="([^"]+)"/);
+    assert.ok(line, "the historical projection is plotted");
+    assert.ok(line[1].trim().split(/\s+/).length > 100, "the chart renders the daily course rather than a straight endpoint segment");
+  }
+  const summary = context.buildLageSummary();
+  assert.match(summary, /45\.0%[\s\S]*letztjährigem Verlauf/);
+  assert.match(summary, /47\.0%[\s\S]*letztjährigem Verlauf/);
+});
+
+test("missing prior-year history produces an unavailable chart rather than a linear fallback", async () => {
+  const { element, state } = await dashboardAt("2026-11-01T12:00:00Z", "2026-10-30", {
+    earlierFill: 20,
+    omitHistoryDate: "2026-02-10",
+  });
+  assert.equal(state.deProjection.complete, false);
+  assert.equal(state.deProjection.projected, null);
+  assert.equal(state.euProjection.projected, null);
+  assert.equal(element("de-projected-fill").textContent, "--");
+  assert.match(element("de-projection-status").textContent, /Vorjahr|letztjährig/i);
+  assert.doesNotMatch(element("de-chart").innerHTML, /NaN|Infinity/);
+});
+
+test("a leap-year chart uses history outside its visible 365-day window", async () => {
+  const { state } = await dashboardAt("2028-03-01T12:00:00Z", "2028-03-01");
+  assert.equal(projection.daysBetweenDates("2027-03-01", "2028-03-01"), 366);
+  for (const scope of ["de", "eu"]) {
+    const result = state[`${scope}Projection`];
+    assert.equal(result.complete, true, "the model retains the baseline before the visible chart starts");
+    assert.equal(result.projected, 50);
+    assert.equal(result.points.at(-1).date, "2028-11-01");
+  }
 });

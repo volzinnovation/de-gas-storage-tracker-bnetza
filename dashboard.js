@@ -238,7 +238,7 @@ function renderTrajectoryChart(chartId, points, latest, projection) {
   const area = `${x(firstDate)},${chartBottom} ${line} ${x(latest.date)},${chartBottom}`;
   const targetY = y(target.fill);
   const normY = y(projection.normEstimate);
-  const projectionLine = `${x(latest.date)},${y(latest.value)} ${x(chartEnd)},${y(projection.projected)}`;
+  const projectionLine = projection.points.map((point) => `${x(point.date)},${y(point.value)}`).join(" ");
 
   svg.innerHTML = `
     <defs>
@@ -253,15 +253,15 @@ function renderTrajectoryChart(chartId, points, latest, projection) {
     <line class="eu-target" x1="${padding.left}" x2="${width - padding.right}" y1="${targetY}" y2="${targetY}"></line>
     <polygon class="eu-area" style="fill: url(#${chartId}-area-fill)" points="${area}"></polygon>
     <polyline class="eu-line" points="${line}"></polyline>
-    <polyline class="eu-projection" points="${projectionLine}"></polyline>
+    ${projection.complete ? `<polyline class="eu-projection" points="${projectionLine}"></polyline>` : ""}
     <circle class="eu-current-dot" cx="${x(latest.date)}" cy="${y(latest.value)}" r="6"></circle>
     ${projection.normEstimate === null ? "" : `<circle class="eu-norm-dot" cx="${x(latest.date)}" cy="${normY}" r="5"></circle>`}
-    <circle class="eu-target-dot" cx="${x(chartEnd)}" cy="${y(projection.projected)}" r="6"></circle>
+    ${projection.complete ? `<circle class="eu-target-dot" cx="${x(chartEnd)}" cy="${y(projection.projected)}" r="6"></circle>` : ""}
     <text class="eu-axis-label" x="${padding.left}" y="${y(90) - 8}">90%</text>
     <text class="eu-axis-label eu-axis-target" x="${padding.left + 84}" y="${targetY - 8}">${target.label} · ${target.season === "winter" ? "Mindestreserve" : "Ziel"} ${target.shortDate}</text>
     ${projection.normEstimate === null ? "" : `<text class="eu-axis-label" x="${x(latest.date) - 12}" y="${normY + 18}" text-anchor="end">5-Jahres-Norm ≈${projection.normEstimate.toFixed(1)}%</text>`}
     <text class="eu-callout" x="${x(latest.date) - 12}" y="${y(latest.value) + 30}" text-anchor="end">${pct(latest.value)}</text>
-    <text class="eu-projection-label" x="${x(chartEnd) - 8}" y="${Math.max(padding.top + 16, y(projection.projected) - 18)}" text-anchor="end">≈${projection.projected.toFixed(1)}% am ${target.shortDate}</text>
+    ${projection.complete ? `<text class="eu-projection-label" x="${x(chartEnd) - 8}" y="${Math.max(padding.top + 16, y(projection.projected) - 18)}" text-anchor="end">≈${projection.projected.toFixed(1)}% am ${target.shortDate}</text>` : ""}
     <text class="eu-axis-label" x="${padding.left}" y="${height - 16}">${dateText(firstDate)}</text>
     <text class="eu-axis-label" x="${x(latest.date)}" y="${height - 16}" text-anchor="middle">${dateText(latest.date)}</text>
     <text class="eu-axis-label" x="${width - padding.right}" y="${height - 16}" text-anchor="end">${dateText(chartEnd)}</text>
@@ -332,7 +332,7 @@ function renderTrajectory(rows, config) {
   const anchor = recentRows.length > 1 ? recentRows[0] : rows.at(-2);
   const elapsedDays = Math.max(daysBetweenDates(anchor.date, latest.date), 1);
   const rate = (latest.value - anchor.value) / elapsedDays;
-  const outcome = targetProjection(latest.value, rate, latest.date);
+  const outcome = projectionMath.priorYearProjection(rows, latest.date);
   const { requiredRate, projected } = outcome;
   const normEstimate = latest.norm;
   const projection = { ...outcome, latest, anchor, rate, remainingDays: outcome.days, normEstimate };
@@ -342,15 +342,18 @@ function renderTrajectory(rows, config) {
   document.getElementById(config.currentDateId).textContent = `${dateText(latest.date)} · ${latest.source}`;
   document.getElementById(config.normFillId).textContent = normEstimate === null ? "--" : `≈${normEstimate.toFixed(1)}%`;
   document.getElementById(config.normGapId).textContent = normEstimate === null ? "Norm nicht verfügbar" : `${(latest.value - normEstimate).toFixed(1)}pp vs. Norm`;
-  document.getElementById(config.recentRateId).textContent = euRateText(rate);
+  document.getElementById(config.recentRateId).textContent = euRateText(outcome.meanDelta);
   document.getElementById(config.requiredRateId).textContent = euRateText(requiredRate);
-  document.getElementById(config.projectedFillId).textContent = `${projected.toFixed(1)}%`;
+  document.getElementById(config.projectedFillId).textContent = projected === null ? "--" : `${projected.toFixed(1)}%`;
   const status = document.getElementById(config.statusId);
-  status.textContent = outcome.met
-    ? `≈${projected.toFixed(1)}% bei aktuellem Tempo · ${outcome.target.season === "winter" ? "Mindestreserve gewahrt" : "Ziel erreicht"}`
-    : `≈${projected.toFixed(1)}% bei aktuellem Tempo · ${outcome.shortfall.toFixed(1)}pp unter ${outcome.target.label}`;
+  status.textContent = !outcome.complete
+    ? `Projektion nicht verfügbar: Vorjahresdaten fehlen (${outcome.missingDates.length} Kalendertage).`
+    : outcome.met
+      ? `≈${projected.toFixed(1)}% bei letztjährigem Verlauf · ${outcome.target.season === "winter" ? "Mindestreserve gewahrt" : "Ziel erreicht"}`
+      : `≈${projected.toFixed(1)}% bei letztjährigem Verlauf · ${outcome.shortfall.toFixed(1)}pp unter ${outcome.target.label}`;
   status.dataset.tone = outcome.met ? "ok" : "warn";
-  renderTrajectoryChart(config.chartId, rows, latest, projection);
+  const visibleRows = rows.filter((row) => row.date >= projectionMath.addDays(latest.date, -365));
+  renderTrajectoryChart(config.chartId, visibleRows, latest, projection);
 }
 
 function renderEuTrajectory(rows) {
@@ -475,23 +478,31 @@ function buildLageSummary() {
     averageRate,
     latest.latest_data_date,
   );
-  const target = targetProjection(fill, averageRate || 0, latest.latest_data_date);
+  const target = state.deProjection ?? targetProjection(fill, averageRate || 0, latest.latest_data_date);
   const summary = [
     `Gasspeicher Deutschland ${dateText(latest.latest_data_date)}:`,
     `${pct(fill)} Füllstand, Status ${statusLabel},`,
     `${signedPercentagePoints(fill - minimum)} zur kritischen Schwelle ${pct(minimum)}.`,
     `30-Tage-Trend ${signedPct(averageRate)}.`,
     `Fortschreibung des 30-Tage-Trends: ${outcome.title}.`,
-    `${target.target.label}-${target.target.season === "winter" ? "Mindestreserve" : "Ziel"} am ${dateText(target.target.date)}: ${pct(target.projected)} Projektion, ${target.met ? "ausreichend" : `nicht ausreichend, ${target.shortfall.toFixed(1)}pp fehlen`}.`,
+    `${target.target.label}-${target.target.season === "winter" ? "Mindestreserve" : "Ziel"} am ${dateText(target.target.date)}: ` +
+      (target.complete === false ? "Vorjahresprojektion nicht verfügbar."
+        : `${pct(target.projected)} Projektion bei letztjährigem Verlauf, ${target.met ? "ausreichend" : `nicht ausreichend, ${target.shortfall.toFixed(1)}pp fehlen`}.`),
   ];
   if (state.euProjection) {
     summary.push(
-      `EU ${dateText(state.euProjection.latest.date)}: ${pct(state.euProjection.latest.value)} Füllstand, Projektion ${state.euProjection.projected.toFixed(1)}% bis ${dateText(state.euProjection.target.date)} bei ${euRateText(state.euProjection.rate)}.`,
+      `EU ${dateText(state.euProjection.latest.date)}: ${pct(state.euProjection.latest.value)} Füllstand, ` +
+      (state.euProjection.complete
+        ? `Projektion ${state.euProjection.projected.toFixed(1)}% bis ${dateText(state.euProjection.target.date)} bei letztjährigem Verlauf.`
+        : "Vorjahresprojektion nicht verfügbar."),
     );
   }
   if (state.deProjection) {
     summary.push(
-      `DE-GIE-Norm ${dateText(state.deProjection.latest.date)}: ${pct(state.deProjection.normEstimate)}; Projektion ${state.deProjection.projected.toFixed(1)}% bis ${dateText(state.deProjection.target.date)} bei ${euRateText(state.deProjection.rate)}.`,
+      `DE-GIE-Norm ${dateText(state.deProjection.latest.date)}: ${pct(state.deProjection.normEstimate)}; ` +
+      (state.deProjection.complete
+        ? `Projektion ${state.deProjection.projected.toFixed(1)}% bis ${dateText(state.deProjection.target.date)} bei letztjährigem Verlauf.`
+        : "Vorjahresprojektion nicht verfügbar."),
     );
   }
   summary.push("https://volzinnovation.github.io/de-gas-storage-tracker-bnetza/");
@@ -554,7 +565,7 @@ function renderTargetLabels() {
   for (const [scope, name] of [["eu", "EU-Gasspeicher"], ["de", "Deutsche Gasspeicher"]]) {
     document.getElementById(`${scope}-title`).textContent = `${name} bis ${target.shortDate} ${target.date.slice(0, 4)}`;
     document.getElementById(`${scope}-description`).textContent =
-      `Aktueller Füllstand, 5-Jahres-Norm und Fortschreibung des jüngsten 30-Tage-Tempos. Ziel: mindestens ${target.label} am ${dateText(target.date)}${reserve ? " als Winterreserve" : " zum Ende des Einspeicherfensters"}.`;
+      `Aktueller Füllstand, 5-Jahres-Norm und Projektion bei letztjährigem Verlauf. Ziel: mindestens ${target.label} am ${dateText(target.date)}${reserve ? " als Winterreserve" : " zum Ende des Einspeicherfensters"}.`;
     document.getElementById(`${scope}-target-date`).textContent = `${target.shortDate} ${target.date.slice(0, 4)}`;
     document.getElementById(`${scope}-target-fill`).textContent = reserve ? `${target.label} Minimum` : target.label;
     document.getElementById(`${scope}-projected-label`).textContent = `Projektion am ${target.shortDate}: `;
@@ -607,9 +618,8 @@ async function init() {
     const gieResponse = await fetch(GIE_CSV_URL);
     if (!gieResponse.ok) throw new Error(`GIE CSV request failed: ${gieResponse.status}`);
     const gieText = await gieResponse.text();
-    const recentYear = (series) => series.filter((row) => row.date >= projectionMath.addDays(series.at(-1).date, -365));
-    const euGieRows = recentYear(parseGieCsv(gieText, "EU"));
-    const deGieRows = recentYear(parseGieCsv(gieText, "DE"));
+    const euGieRows = parseGieCsv(gieText, "EU");
+    const deGieRows = parseGieCsv(gieText, "DE");
     state.euRows = euGieRows;
     state.deRows = deGieRows;
     renderEuTrajectory(euGieRows);

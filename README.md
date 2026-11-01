@@ -91,9 +91,14 @@ Das Cockpit zeigt die EU- und Deutschland-Gasspeicherstände aus dem direkten
 [GIE AGSI+ API](https://agsi.gie.eu/)-Abruf. Die
 [Global-Energy-Flow-Trajektorie](https://global-energy-flow.com/storage/trajectory/)
 wird als Kontext- und Vergleichsquelle ausgewiesen.
-Die Projektion wird im Browser aus dem jüngsten verfügbaren Fenster berechnet:
-aktueller Füllstand plus durchschnittliche tägliche Änderung zwischen den
-Messpunkten innerhalb der letzten 30 Tage. Das heutige Datum in `Europe/Berlin`
+Die beiden Trajektorien zeigen eine Projektion **bei letztjährigem Verlauf**:
+Ausgangspunkt ist der jüngste gemessene Füllstand. Für jeden Folgetag wird die
+Füllstandsänderung zwischen den entsprechenden Kalendertagen des Vorjahres auf
+den zuletzt projizierten Wert addiert. Beispielsweise verwendet der 2. November
+2026 die Änderung vom 1. zum 2. November 2025; der 1. März 2027 verwendet die
+Änderung vom 28. Februar zum 1. März 2026. Die absoluten Vorjahresfüllstände
+werden nicht übernommen. Die gestrichelte Kurve enthält jeden projizierten Tag.
+Das heutige Datum in `Europe/Berlin`
 bestimmt das saisonale Planungsziel für alle Diagramme, Labore und Szenarien:
 vom 1. November bis Ende Februar mindestens **20% Reserve am nächsten 1. März**,
 vom 1. März bis Ende Oktober mindestens **80% Füllstand am 1. November**.
@@ -105,7 +110,7 @@ das tatsächliche Datenstand-Datum.
 
 Der deutsche Bereich verwendet dieselbe Darstellung: aktueller Füllstand,
 GIE-5-Jahres-Norm (Mittelwert desselben Kalendertags in den fünf Vorjahren),
-Abweichung zur Norm, saisonales Mindestziel und 30-Tage-Projektion. Die bisherigen BNetzA-
+Abweichung zur Norm, saisonales Mindestziel und Projektion anhand der Vorjahresänderungen. Die bisherigen BNetzA-
 Projektionsläufe werden nur noch als separates Archiv angezeigt.
 
 In beiden Saisons gilt das Ziel bei einem Füllstand **größer oder gleich** der
@@ -113,6 +118,15 @@ Zielmarke als erreicht. Die 20% sind eine Mindestreserve, kein Entnahmeziel.
 Projektionen sind auf 0–100% begrenzt; am Zieltermin wird kein zusätzlicher
 Projektionstag erfunden. Kalendertage werden unabhängig von Zeitumstellungen
 berechnet. Die Diagramme zeigen das jüngste verfügbare Jahr.
+Die Berechnung verwendet die vollständige Historie. Fehlt ein benötigter
+Vorjahresmesspunkt, wird die Projektion als nicht verfügbar gekennzeichnet.
+Ein 29. Februar ohne entsprechendes Vorjahresdatum wird dem 28. Februar
+zugeordnet; fehlt im Projektionsjahr ein historischer Schalttag, fließt dessen
+Änderung in den Schritt zum 1. März ein.
+
+Der gemessene 30-Tage-Trend im Kopfbereich, die frei gewählte lineare Rate im
+Winterreserve-Labor und das verbrauchsbasierte Flussbilanz-Labor bleiben
+eigenständige Modelle.
 
 Im `Winterreserve-Labor` wird die mindestens erforderliche deutsche Tagesänderung
 bis zum saisonalen Ziel berechnet und auf dem Slider markiert. Eine negative

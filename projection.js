@@ -58,7 +58,59 @@
     };
   }
 
-  const api = Object.freeze({ berlinDate, seasonalTarget, daysBetweenDates, addDays, clampFill, project });
+  function previousYearDate(iso) {
+    const date = new Date(timestamp(iso));
+    const year = date.getUTCFullYear() - 1;
+    // A leap day without a prior-year counterpart uses February 28. Mapping
+    // consecutive dates also includes a skipped historical leap day on March 1.
+    const previous = new Date(Date.UTC(year, date.getUTCMonth(), date.getUTCDate()));
+    if (previous.getUTCMonth() !== date.getUTCMonth()) return `${year}-02-28`;
+    return previous.toISOString().slice(0, 10);
+  }
+
+  function priorYearProjection(rows, dataDate, target = seasonalTarget()) {
+    const history = new Map(rows.filter((row) => Number.isFinite(row.value))
+      .map((row) => [row.date, row.value]));
+    const basis = history.get(dataDate);
+    if (basis === undefined) throw new RangeError(`Missing projection basis: ${dataDate}`);
+    const outcome = project(basis, 0, dataDate, target);
+    const initial = { date: dataDate, value: clampFill(basis) };
+    const referenceStart = previousYearDate(dataDate);
+    const referenceEnd = previousYearDate(target.date);
+    const missing = new Set();
+    const steps = [];
+    for (let day = 1; day <= outcome.days; day += 1) {
+      const date = addDays(dataDate, day);
+      const referenceDate = previousYearDate(date);
+      const previousReferenceDate = previousYearDate(addDays(date, -1));
+      for (const required of [previousReferenceDate, referenceDate]) {
+        if (!history.has(required)) missing.add(required);
+      }
+      steps.push({ date, referenceDate, previousReferenceDate });
+    }
+    if (missing.size) {
+      return { ...outcome, projected: null, rawProjected: null, met: null, shortfall: null,
+        points: [initial], meanDelta: null, complete: false, missingDates: [...missing].sort(),
+        referenceStart, referenceEnd };
+    }
+    const points = [initial];
+    let fill = initial.value;
+    let rawProjected = fill;
+    for (const step of steps) {
+      const delta = history.get(step.referenceDate) - history.get(step.previousReferenceDate);
+      rawProjected += delta;
+      fill = clampFill(fill + delta);
+      points.push({ ...step, delta, value: fill });
+    }
+    const met = fill >= target.fill - 1e-9;
+    return { ...outcome, projected: fill, rawProjected, met,
+      shortfall: met ? 0 : target.fill - fill, points, complete: true, missingDates: [],
+      meanDelta: outcome.days > 0 ? (rawProjected - initial.value) / outcome.days : 0,
+      referenceStart, referenceEnd };
+  }
+
+  const api = Object.freeze({ berlinDate, seasonalTarget, daysBetweenDates, addDays, clampFill,
+    project, previousYearDate, priorYearProjection });
   root.GasStorageProjection = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(globalThis);

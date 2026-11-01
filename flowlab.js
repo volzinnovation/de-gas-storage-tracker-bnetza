@@ -725,9 +725,8 @@
   }
 
   /**
-   * Geisterlinie: dieselbe lineare Fortschreibung des gemessenen 30-Tage-Tempos,
-   * die das Cockpit-Chart darueber zeichnet. Sie haengt bewusst nicht an den
-   * Reglern — sie ist der Bezugspunkt, gegen den die Simulation gelesen wird.
+   * Geisterlinie: lineare Fortschreibung des gemessenen 30-Tage-Tempos als
+   * eigener Bezugspunkt fuer die Simulation. Sie haengt nicht an den Reglern.
    */
   function renderLinearReference() {
     const linear = (index) => state.startFill + state.measuredRate * index;

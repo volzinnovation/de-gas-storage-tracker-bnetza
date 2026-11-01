@@ -55,6 +55,7 @@ def main() -> int:
         'id="lab-description"',
         'id="scenario-description"',
         "projection.js",
+        "bei letztjährigem Verlauf",
         'id="eu-chart"',
         'id="copy-summary"',
         'id="copy-status"',
@@ -94,6 +95,7 @@ def main() -> int:
         "GasStorageProjection",
         "refreshSeasonalTarget",
         "targetProjection",
+        "priorYearProjection",
         "technical_max_injection_gwh_per_day",
     ):
         if expected not in dashboard_js:
