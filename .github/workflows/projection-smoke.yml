@@ -9,6 +9,9 @@ on:
       - "index.html"
       - "styles.css"
       - "dashboard.js"
+      - "projection.js"
+      - "flowlab.js"
+      - "flowlab.css"
       - "data/projections.csv"
       - "data/eu_storage.csv"
       - "data/gie_storage.csv"
@@ -58,7 +61,13 @@ jobs:
             scripts/update_the_consumption.py
 
       - name: Check dashboard JavaScript syntax
-        run: node --check dashboard.js
+        run: |
+          node --check projection.js
+          node --check dashboard.js
+          node --check flowlab.js
+
+      - name: Test seasonal targets and projection calculations
+        run: node --test scripts/test_*.js
 
       - name: Test GIE and THE API validation
         run: python -m unittest discover -s scripts -p 'test_*.py'

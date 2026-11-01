@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Erzeugt METHODIK.pdf — Herkunft, Pruefung und Grenzen jeder Zahl im Flussbilanz-Labor.
+"""Erzeugt METHODIK.pdf - Herkunft, Pruefung und Grenzen jeder Zahl im Flussbilanz-Labor.
 
 Alle Kennzahlen werden hier aus den Datendateien des Repositorys frisch
 gerechnet, nicht abgeschrieben. Was nicht gerechnet werden kann (Zahlen aus
 Behoerdenberichten), steht mit Quelle und Abrufdatum in TEXTQUELLEN.
 """
-import csv, json, datetime as dt, statistics as st, sys
+import csv, json, datetime as dt, statistics as st, sys, os
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+from seasonal_projection import minimum_supply_level, seasonal_target, simulate_fill
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT
@@ -29,14 +32,20 @@ OUT = Path(sys.argv[2]) if len(sys.argv) > 2 else ROOT / "METHODIK.pdf"
 # zeichen, Gedankenstrich und m3 zuverlaessig zur Verfuegung. Fehlen die
 # Dateien, bricht der Lauf mit einer lesbaren Meldung ab, statt ein PDF voller
 # schwarzer Kaesten zu erzeugen.
-F = Path("/usr/share/fonts/truetype/dejavu")
 _FONTS = {"DJ": "DejaVuSans.ttf", "DJ-B": "DejaVuSans-Bold.ttf",
           "DJ-I": "DejaVuSans-Oblique.ttf", "DJ-M": "DejaVuSansMono.ttf"}
+_font_dirs = [
+    Path(os.environ.get("METHODIK_FONT_DIR", "/usr/share/fonts/truetype/dejavu")),
+    Path("/usr/local/share/fonts/dejavu"),
+    Path(sys.executable).resolve().parents[2] / "native/libreoffice-headless/libreoffice/LibreOfficeDev.app/Contents/Resources/fonts/truetype",
+]
+F = next((p for p in _font_dirs if all((p / f).exists() for f in _FONTS.values())), _font_dirs[0])
 _fehlt = [d for d in _FONTS.values() if not (F / d).exists()]
 if _fehlt:
     raise SystemExit(
         f"DejaVu-Schriften fehlen in {F}: {', '.join(_fehlt)}. "
-        "Unter Debian/Ubuntu: apt-get install -y fonts-dejavu-core"
+        "Unter Debian/Ubuntu: apt-get install -y fonts-dejavu-core; "
+        "alternativ METHODIK_FONT_DIR auf den DejaVu-Schriftordner setzen."
     )
 for name, datei in _FONTS.items():
     pdfmetrics.registerFont(TTFont(name, str(F / datei)))
@@ -88,7 +97,7 @@ k24 = kal["2024"]
 V24 = sum(num(r["consumption_gwh"]) for r in k24) / 1000
 S24 = sum(num(r["slp_gwh"]) for r in k24) / sum(num(r["consumption_gwh"]) for r in k24) * 100
 
-# Jahresgang des Zuflusses — identisch zu flowlab.js
+# Jahresgang des Zuflusses - identisch zu flowlab.js
 flows = {r["date"]: num(r["injection_gwh_per_day"]) - num(r["withdrawal_gwh_per_day"]) for r in gie}
 cons = {}
 for r in con:
@@ -120,39 +129,34 @@ def monat(idx, mm):
     v = [x for (m, _), x in idx.items() if m == mm]
     return sum(v) / len(v)
 
-ZIEL_D = dt.date(D0.year if (D0.month, D0.day) <= (11, 1) else D0.year + 1, 11, 1)
-T = (ZIEL_D - D0).days
+HEUTE = dt.datetime.now(ZoneInfo("Europe/Berlin")).date()
+ZIEL_D, ZIEL_F = seasonal_target(HEUTE)
+ZIEL_TEXT = "1. März" if ZIEL_F == 20 else "1. November"
+T = max(0, (ZIEL_D - D0).days)
 
 def key(i, ref):
     d = D0 + dt.timedelta(days=i)
     k = (d.month, d.day)
     return k if k in cons[ref] else (2, 28)
 
-FENSTER = sum(IDX.get(key(i, max(voll)), 1) for i in range(T)) / T
-FENSTER_ALT = sum(IDX_ALT.get(key(i, max(voll)), 1) for i in range(T)) / T
+FENSTER = sum(IDX.get(key(i, max(voll)), 1) for i in range(T)) / T if T else 1
+FENSTER_ALT = sum(IDX_ALT.get(key(i, max(voll)), 1) for i in range(T)) / T if T else 1
 
 def lauf(niv, ref, tage):
-    f = F0
-    for i in range(tage):
-        s_, rl = cons[ref][key(i, ref)]
-        f = max(0.0, min(100.0, f + max(-WDR, min(INJ, niv * IDX.get(key(i, ref), 1) - (s_ + rl))) / PP))
-    return f
+    return simulate_fill(F0, PP, INJ, WDR,
+                         [sum(cons[ref][key(i, ref)]) for i in range(tage)],
+                         [IDX.get(key(i, ref), 1) for i in range(tage)], niv)
 
 def zielniveau(ref):
-    lo, hi = 0.0, 20000.0
-    for _ in range(90):
-        mid = (lo + hi) / 2
-        if lauf(mid, ref, T) < 80.0:
-            lo = mid
-        else:
-            hi = mid
-    return (lo + hi) / 2
+    return minimum_supply_level(F0, PP, INJ, WDR,
+                                [sum(cons[ref][key(i, ref)]) for i in range(T)],
+                                [IDX.get(key(i, ref), 1) for i in range(T)], ZIEL_F)
 
 REF = max(voll)
-IST0 = sum(cons[REF][key(0, REF)]) + RATE * PP
+IST0 = max(0.0, sum(cons[REF][key(0, REF)]) + RATE * PP)
 NIVEAU = IST0 / IDX.get(key(0, REF), 1)
 PROJ = lauf(NIVEAU, REF, T)
-LINEAR = F0 + RATE * T
+LINEAR = max(0.0, min(100.0, F0 + RATE * T))
 
 jahrestab = []
 for y in sorted(voll):
@@ -160,11 +164,11 @@ for y in sorted(voll):
     rs = jahre[y]
     tot = [num(r["consumption_gwh"]) for r in rs]
     s_ = sum(num(r["slp_gwh"]) for r in rs)
-    ist = sum(cons[y][key(0, y)]) + RATE * PP
+    ist = max(0.0, sum(cons[y][key(0, y)]) + RATE * PP)
     jahrestab.append({
         "y": y, "tage": len(rs), "twh": sum(tot) / 1000, "slp": s_ / sum(tot) * 100,
         "mittel": st.mean(tot), "min": min(tot), "max": max(tot),
-        "ist": ist, "ziel": zn, "schnitt": zn * FENSTER,
+        "ist": ist, "ziel": zn, "schnitt": zn * FENSTER if zn is not None else None,
         "proj": lauf(ist / IDX.get(key(0, y), 1), y, T),
     })
 
@@ -174,15 +178,15 @@ DWD = {2019: 3.06, 2020: 4.17, 2021: 1.81, 2022: 3.28, 2023: 2.88, 2024: 4.04, 2
 ss = getSampleStyleSheet()
 def S(name, **kw):
     base = dict(fontName="DJ", fontSize=9.2, leading=13.6, textColor=colors.HexColor("#1c2427"),
-                alignment=TA_LEFT, spaceAfter=6)
+                alignment=TA_LEFT, spaceAfter=6, allowWidows=0, allowOrphans=0)
     base.update(kw)
     return ParagraphStyle(name, **base)
 
 P      = S("P")
 PS     = S("PS", fontSize=8.3, leading=12.2, textColor=GREY)
 H1     = S("H1", fontName="DJ-B", fontSize=17, leading=21, textColor=TEAL, spaceBefore=2, spaceAfter=3)
-H2     = S("H2", fontName="DJ-B", fontSize=12.4, leading=16, textColor=TEAL, spaceBefore=13, spaceAfter=5)
-H3     = S("H3", fontName="DJ-B", fontSize=10, leading=14, textColor=ACC, spaceBefore=8, spaceAfter=3)
+H2     = S("H2", fontName="DJ-B", fontSize=12.4, leading=16, textColor=TEAL, spaceBefore=13, spaceAfter=5, keepWithNext=True)
+H3     = S("H3", fontName="DJ-B", fontSize=10, leading=14, textColor=ACC, spaceBefore=8, spaceAfter=3, keepWithNext=True)
 LEAD   = S("LEAD", fontSize=10.2, leading=15, textColor=GREY, spaceAfter=10)
 MONO   = S("MONO", fontName="DJ-M", fontSize=8.2, leading=12.4, textColor=TEAL)
 CELL   = S("CELL", fontSize=8.2, leading=11.4, spaceAfter=0)
@@ -200,14 +204,14 @@ def kopf(c, d):
     c.setStrokeColor(LINE); c.setLineWidth(0.5)
     c.line(18 * mm, A4[1] - 14 * mm, A4[0] - 18 * mm, A4[1] - 14 * mm)
     c.line(18 * mm, 15 * mm, A4[0] - 18 * mm, 15 * mm)
-    c.drawString(18 * mm, 11 * mm, "github.com/icrfornax/de-gas-storage-tracker-bnetza")
+    c.drawString(18 * mm, 11 * mm, "github.com/volzinnovation/de-gas-storage-tracker-bnetza")
     c.drawRightString(A4[0] - 18 * mm, 11 * mm, f"Seite {c.getPageNumber()}")
     c.restoreState()
 
 doc = BaseDocTemplate(str(OUT), pagesize=A4,
                       leftMargin=18 * mm, rightMargin=18 * mm,
                       topMargin=20 * mm, bottomMargin=20 * mm,
-                      title="Flussbilanz-Labor — Methodik und Datenbasis",
+                      title="Flussbilanz-Labor - Methodik und Datenbasis",
                       author="de-gas-storage-tracker-bnetza",
                       subject="Herkunft, Pruefung und Grenzen der verwendeten Daten")
 doc.addPageTemplates([PageTemplate(id="n",
@@ -262,7 +266,7 @@ def formel(text):
     ]))
     return t
 
-n0 = lambda v: f"{v:,.0f}".replace(",", ".")
+n0 = lambda v: "nicht erreichbar" if v is None else f"{v:,.0f}".replace(",", ".")
 n1 = lambda v: f"{v:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
 n2 = lambda v: f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 n3 = lambda v: f"{v:.3f}".replace(".", ",")
@@ -274,14 +278,22 @@ s += [
   Paragraph("Flussbilanz-Labor: Methodik und Datenbasis", H1),
   Paragraph(
     "Woher jede Zahl stammt, wie sie geprüft wurde und wo die Grenzen liegen. "
-    f"Erzeugt am {dt.date.today().strftime('%d.%m.%Y')} aus den Datendateien des Repositorys — "
+    f"Erzeugt am {HEUTE.strftime('%d.%m.%Y')} (Europe/Berlin) aus den Datendateien des Repositorys - "
     "alle Kennzahlen in diesem Dokument sind beim Bau frisch nachgerechnet, keine abgeschriebenen Werte.", LEAD),
-  kasten("Was dieses Dokument leisten soll — und was nicht",
+  kasten("Was dieses Dokument leisten soll - und was nicht",
     "Es soll <b>überprüfbar</b> machen, was die Grafik zeigt: jede Eingangsgröße mit Quelle, jede "
     "Rechnung als Formel, jede Annahme ausdrücklich als Annahme. Es ist <b>keine Prognose</b>. "
     "Die Grafik schreibt gemessene Vergangenheit unter einer einstellbaren Zufluss-Annahme fort. "
-    "Was tatsächlich passiert, hängt an Wetter, Preisen und Politik — davon modelliert diese Seite nichts."),
+    "Was tatsächlich passiert, hängt an Wetter, Preisen und Politik - davon modelliert diese Seite nichts."),
   Spacer(1, 9),
+  kasten("Aktueller saisonaler Prüfpunkt",
+    f"Mindestens <b>{n0(ZIEL_F)} % am {ZIEL_D.strftime('%d.%m.%Y')}</b>. Der Kalender in "
+    "Europe/Berlin wählt das Ziel, nicht das Datum der zuletzt eingegangenen Messung: "
+    "ab 1. November gilt die Mindestreserve von 20 % zum folgenden 1. März; ab 1. März "
+    "die Vergleichsmarke von 80 % zum folgenden 1. November. Ein Füllstand oberhalb des "
+    "Prüfpunkts erfüllt das Ziel in beiden Jahreszeiten. Die Messung vom "
+    f"{D0.strftime('%d.%m.%Y')} bleibt der Startpunkt; es werden {T} Kalendertage fortgeschrieben. "
+    "Die 20 % sind ein Planungsziel für die Reserve, keine hier behauptete gesetzliche Vorgabe."),
 ]
 
 # =============================================================== 1 Kurzfassung
@@ -295,16 +307,16 @@ s += [tabelle(
    ["Tagesverbrauch je Sektor", "Trading Hub Europe, aggregierte Allokationsdaten", "gemessen", "Entnahmeseite, nicht einstellbar"],
    ["Zufluss (Jahresmittel)", "am Datenstand aus Verbrauch + gemessenem Einspeichertempo", "eingestellt", "die einzige freie Variable"],
    ["Jahresgang des Zuflusses", "abgeleitet aus denselben zwei Reihen", "gerechnet", "verteilt das Jahresmittel auf Tage"],
-   ["Aufteilung Industrie/Strom 70:30", "Modellannahme, kalibriert", "Annahme", "keine — verschiebt nur zwischen zwei Karten"],
-   ["Aufteilung des Zuflusses auf Quellen", "Importmengen 2024", "Annahme", "keine — nur die Summe zählt"]],
+   ["Aufteilung Industrie/Strom 70:30", "Modellannahme, kalibriert", "Annahme", "keine - verschiebt nur zwischen zwei Karten"],
+   ["Aufteilung des Zuflusses auf Quellen", "Importmengen 2024", "Annahme", "keine - nur die Summe zählt"]],
   [W*0.24, W*0.30, W*0.11, W*0.35], rechts=())]
 
 s += [Spacer(1, 5), kasten("Der wichtigste Satz zur Einordnung",
   f"Die Entnahmeseite ist <b>nicht modelliert, sondern gemessen</b>. Für jeden Simulationstag nimmt "
-  f"das Labor den realen Verbrauch desselben Kalendertags aus einem echten Gasjahr — {n0(len(con))} "
+  f"das Labor den realen Verbrauch desselben Kalendertags aus einem echten Gasjahr - {n0(len(con))} "
   f"Gastage stehen dafür zur Verfügung, lückenlos. Die einzige Stellschraube ist der Zufluss. "
   f"Wer das Ergebnis angreifen will, muss also entweder die Messreihen angreifen oder die "
-  f"Zufluss-Annahme — nicht ein Verbrauchsmodell, denn es gibt keins.")]
+  f"Zufluss-Annahme - nicht ein Verbrauchsmodell, denn es gibt keins.")]
 
 # =============================================================== 2 Datenquellen
 s += [Paragraph("2 · Die Datenquellen im Einzelnen", H2)]
@@ -334,7 +346,7 @@ s += [Spacer(1, 5), Paragraph(
 
 s += [Paragraph("2.2 · Tagesverbrauch: Trading Hub Europe", H3), Paragraph(
   "Trading Hub Europe (THE) ist der deutsche Marktgebietsverantwortliche und veröffentlicht die "
-  "aggregierten Allokationsmengen aller Entnahmestellen im deutschen Marktgebiet — je Gastag, "
+  "aggregierten Allokationsmengen aller Entnahmestellen im deutschen Marktgebiet - je Gastag, "
   "getrennt nach Gasqualität (H/L) und Abrechnungsart. Der Abruf läuft über die dokumentierte "
   "XML-Schnittstelle ohne Zugangsschlüssel; ein aussagekräftiger User-Agent ist Pflicht.", P),
   formel("https://api.tradinghub.eu/api/dataexport/xmlexport/AggregatedConsumptionData<br/>"
@@ -342,9 +354,9 @@ s += [Paragraph("2.2 · Tagesverbrauch: Trading Hub Europe", H3), Paragraph(
 
 s += [Spacer(1, 6), Paragraph("Die acht Mengenfelder werden zu zwei Sektoren summiert:", P),
   formel("SLP = HGasSLPsyn + HGasSLPana + LGasSLPsyn + LGasSLPana<br/>"
-         "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Standardlastprofil — Haushalte und kleines Gewerbe<br/><br/>"
+         "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Standardlastprofil - Haushalte und kleines Gewerbe<br/><br/>"
          "RLM = HGasRLMmT + LGasRLMmT + HGasRLMoT + LGasRLMoT<br/>"
-         "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;registrierende Leistungsmessung — Industrie und Kraftwerke<br/><br/>"
+         "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;registrierende Leistungsmessung - Industrie und Kraftwerke<br/><br/>"
          "Verbrauch [GWh] = (SLP + RLM) / 1e6")]
 
 s += [Spacer(1, 6), Paragraph(
@@ -375,7 +387,7 @@ s += [Spacer(1, 5), Paragraph(
   "das Abrufskript standardmäßig 45 Tage rückwirkend neu holt und vorhandene Zeilen überschreibt.", P)]
 
 # =============================================================== 3 Verifikation
-s += [PageBreak(), Paragraph("3 · Wie die Daten geprüft wurden", H2), Paragraph(
+s += [Paragraph("3 · Wie die Daten geprüft wurden", H2), Paragraph(
   "Eine Quelle zu nennen genügt nicht. Die folgenden vier Prüfungen sind durchgeführt worden; jede "
   "ist mit den Dateien im Repository wiederholbar.", P)]
 
@@ -394,16 +406,16 @@ s += [Spacer(1, 5), Paragraph(
 
 s += [Paragraph("3.2 · Überlappung zweier unabhängiger Exporte", H3), Paragraph(
   "Die Verbrauchsreihe wurde in zwei Abrufen aus verschiedenen Zeiträumen aufgebaut "
-  "(01.08.2021–31.07.2026 und 01.08.2024–31.07.2026). Die 730 überlappenden Gastage wurden Wert für "
+  "(01.08.2021-31.07.2026 und 01.08.2024-31.07.2026). Die 730 überlappenden Gastage wurden Wert für "
   "Wert verglichen: <b>keine einzige Abweichung</b>. Die Schnittstelle liefert also reproduzierbar "
-  "dieselben Zahlen — sie werden nicht bei jedem Abruf neu geschätzt.", P)]
+  "dieselben Zahlen - sie werden nicht bei jedem Abruf neu geschätzt.", P)]
 
 s += [Paragraph("3.3 · Unabhängige Nachimplementierung des Modells", H3), Paragraph(
-  "Die Rechenkette der Seite wurde ein zweites Mal geschrieben — in Python, direkt aus den Rohdateien, "
-  "ohne eine Zeile des JavaScript-Codes zu übernehmen. Verglichen wurden alle Spalten des "
-  "CSV-Exports über alle fünf Referenzjahre, also rund 1.130 Zeilen. Die größten Abweichungen:", P)]
+  "Dieses Dokument rechnet die tägliche Speicherbilanz in Python aus den Rohdateien nach. "
+  "Die Browserdarstellung verwendet dieselben Eingänge und Grenzen. Für Vergleiche mit dem "
+  "CSV-Export muss dessen Ausgaberundung berücksichtigt werden:", P)]
 
-s += [tabelle(["Größe", "größte Abweichung", "Einordnung"],
+s += [tabelle(["Größe", "Rundungstoleranz", "Einordnung"],
   [["Bedarf gesamt", "0,05 GWh", "Rundung auf 1 Nachkommastelle im Export"],
    ["Zufluss", "0,05 GWh", "dito"],
    ["Netto-Bilanz", "0,05 GWh", "dito"],
@@ -412,15 +424,20 @@ s += [tabelle(["Größe", "größte Abweichung", "Einordnung"],
   [W*0.28, W*0.24, W*0.48], rechts=(1,))]
 
 s += [Spacer(1, 5), Paragraph(
-  "Die Abweichungen entsprechen exakt der Ausgabegenauigkeit. Rechnerisch sind beide "
-  "Implementierungen identisch.", P)]
+  "Die aufgeführten Werte sind die halben Rundungsschritte des Exports, keine neu gemessenen "
+  "Maximalabweichungen. Kalendergrenzen, Mindestreserve und Kapazitätsgrenzen werden zusätzlich "
+  "in den Regressionstests geprüft.", P)]
 
+kontrollen = [lauf(j["ziel"], j["y"], T) for j in jahrestab if j["ziel"] is not None]
 s += [Paragraph("3.4 · Innere Kontrolle des Zielpfads", H3), Paragraph(
-  f"Der nötige Zufluss wird analytisch bestimmt (Bedarfssumme plus Füllstandslücke, geteilt durch den "
-  f"mittleren Jahresgang-Faktor des Fensters). Die unabhängige Nachrechnung bestimmt ihn stattdessen "
-  f"per Bisektion — also durch reines Ausprobieren. Beide Wege treffen sich: der Zielpfad erreicht am "
-  f"1. November in jedem der fünf Referenzjahre <b>exakt 80,000 %</b>. Ein Rechenfehler in der "
-  f"Herleitung würde hier sofort auffallen.", P)]
+  f"Der nötige Zufluss wird per Bisektion in der täglichen Simulation bestimmt, einschließlich "
+  f"Ein-/Ausspeichergrenzen und der Deckelung auf 0 bis 100 %. Gesucht ist der kleinste "
+  f"nichtnegative Zufluss, der am {ZIEL_D.strftime('%d.%m.%Y')} mindestens {n0(ZIEL_F)} % "
+  f"übrig lässt. Für <b>{len(kontrollen)} von {len(jahrestab)} Referenzjahren</b> ist das "
+  f"mit der technischen Einspeicherkapazität möglich. Reicht bereits ein Zufluss von null, "
+  f"kann die Reserve oberhalb des Prüfpunkts liegen; ist der Prüfpunkt selbst bei maximaler "
+  f"Einspeicherung unerreichbar, wird kein scheinbar passender Zufluss ausgegeben. Am Zieltag "
+  f"selbst wird kein zusätzlicher Simulationstag erfunden.", P)]
 
 # =============================================================== 4 Rechenweg
 s += [KeepTogether([Paragraph("4 · Der Rechenweg, Zeile für Zeile", H2), Paragraph(
@@ -430,15 +447,15 @@ s += [KeepTogether([Paragraph("4 · Der Rechenweg, Zeile für Zeile", H2), Parag
     "bedarf(t)      = SLP(Kalendertag, Referenzjahr)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[Haushalte, gemessen]<br/>"
     "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+ RLM(Kalendertag, Referenzjahr)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[Industrie + Strom, gemessen]<br/><br/>"
     "zufluss(t)     = jahresmittel × jahresgang(Kalendertag)<br/><br/>"
-    "netto(t)       = min(einspeicherkap., max(−ausspeicherkap., zufluss(t) − bedarf(t)))<br/><br/>"
+    "netto(t)       = min(einspeicherkap., max(-ausspeicherkap., zufluss(t) - bedarf(t)))<br/><br/>"
     f"fuellstand(t+1) = fuellstand(t) + netto(t) / {n0(PP)} GWh&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[gedeckelt auf 0…100 %]")])]
 
 s += [Spacer(1, 7), Paragraph("4.1 · Woher der Startwert des Zuflusses kommt", H3), Paragraph(
-  "Der Zufluss ist die freie Variable — aber er startet nicht auf einem Wunschwert, sondern auf dem "
+  "Der Zufluss ist die freie Variable - aber er startet nicht auf einem Wunschwert, sondern auf dem "
   "gemessenen Ist-Zustand. Aus dem Speicher lässt sich ablesen, wie viel gerade netto hineingeht; "
   "zusammen mit dem gemessenen Verbrauch ergibt das den Zufluss:", P),
   formel(
-    f"30-Tage-Tempo  = (fuellstand({D0.strftime('%d.%m.')}) − fuellstand({(D0-dt.timedelta(days=30)).strftime('%d.%m.')})) / 30<br/>"
+    f"30-Tage-Tempo  = (fuellstand({D0.strftime('%d.%m.')}) - fuellstand({(D0-dt.timedelta(days=30)).strftime('%d.%m.')})) / 30<br/>"
     f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;= {n2(RATE)} Prozentpunkte pro Tag<br/><br/>"
     f"Ist-Zufluss(0) = bedarf(0) + 30-Tage-Tempo × {n0(PP)} GWh<br/>"
     f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;= {n0(sum(cons[REF][key(0,REF)]))} + {n0(RATE*PP)} = {n0(IST0)} GWh/Tag<br/><br/>"
@@ -454,10 +471,10 @@ s += [Paragraph("5 · Der Jahresgang des Zuflusses", H2), Paragraph(
   "Diesen Verlauf hat das Labor <b>nicht angenommen, sondern aus zwei gemessenen Reihen abgeleitet</b>. "
   "Der Gedanke dahinter ist eine simple Bilanz: was in Deutschland ankam, wurde entweder verbraucht "
   "oder eingespeichert; was aus dem Speicher kam, muss abgezogen werden.", P),
-  formel("zufluss(Tag) = verbrauch(THE) + einspeicherung(GIE) − ausspeicherung(GIE)")]
+  formel("zufluss(Tag) = verbrauch(THE) + einspeicherung(GIE) - ausspeicherung(GIE)")]
 
 s += [Spacer(1, 6), Paragraph(
-  "Transit und Exporte fallen dabei heraus — übrig bleibt, was dem deutschen Markt an diesem Tag "
+  "Transit und Exporte fallen dabei heraus - übrig bleibt, was dem deutschen Markt an diesem Tag "
   "tatsächlich zur Verfügung stand. Die Tageswerte werden über die Referenzjahre gemittelt, zyklisch "
   "über ein 15-Tage-Fenster geglättet (damit der 31.&nbsp;Dezember an den 1.&nbsp;Januar anschließt) und auf "
   "Jahresmittel 1 normiert.", P)]
@@ -475,38 +492,39 @@ s += [Spacer(1, 5), Paragraph(
   f"<b>{n2(mx[1])} am {mx[0][1]}.&nbsp;{MONAT[mx[0][0]]}</b>. Das Rohmittel der zugrunde liegenden "
   f"Gasjahre {', '.join(f'{y}/{str(y+1)[2:]}' for y in MODERN)} liegt bei {n0(ROH)} GWh/Tag.", P)]
 
-s += [Spacer(1, 3), kasten("Warum das Ergebnis über dem Tagesschnitt liegt",
-  f"Das Einspeicherfenster vom {D0.strftime('%d.%m.')} bis zum 1.&nbsp;November liegt mit einem mittleren "
-  f"Faktor von <b>{n2(FENSTER)}</b> im Zufluss-Tal. Ein Jahresmittel von X GWh/Tag liefert in diesem "
-  f"Fenster also nur {n2(FENSTER)}&nbsp;× X. Deshalb nennt die Grafik zwei Zahlen: den nötigen "
-  f"<i>Tagesschnitt im Fenster</i> ({n0(zielniveau(REF)*FENSTER)} GWh/Tag) und das dafür nötige "
-  f"<i>Jahresniveau</i> ({n0(zielniveau(REF))} GWh/Tag). Beide meinen dasselbe, nur anders gemessen.")]
+s += [Spacer(1, 3), kasten("Tagesschnitt und Jahresniveau",
+  f"Das Zielfenster vom {D0.strftime('%d.%m.%Y')} bis zum {ZIEL_D.strftime('%d.%m.%Y')} hat einen mittleren "
+  f"Jahresgang-Faktor von <b>{n2(FENSTER)}</b>. Ein Jahresmittel von X GWh/Tag liefert in diesem "
+  f"Fenster also {n2(FENSTER)}&nbsp;× X. Deshalb nennt die Grafik zwei Zahlen: den nötigen "
+  f"<i>Tagesschnitt im Fenster</i> ({n0(zielniveau(REF)*FENSTER) if zielniveau(REF) is not None else 'nicht erreichbar'} GWh/Tag) und das dafür nötige "
+  f"<i>Jahresniveau</i> ({n0(zielniveau(REF))} GWh/Tag). Beide meinen denselben Zuflussverlauf. "
+  f"Bei einem Fenster von null Tagen ist kein Tagesschnitt erforderlich.")]
 
-s += [Spacer(1, 8), Paragraph("5.2 · Warum nur Gasjahre ab 2023/24 — und was das ändert", H3), Paragraph(
+s += [Spacer(1, 8), Paragraph("5.2 · Warum nur Gasjahre ab 2023/24 - und was das ändert", H3), Paragraph(
   "Für den Jahresgang werden bewusst nur die jüngeren Gasjahre verwendet. 2021/22 lief Nord Stream, "
-  "2022/23 war das Notfall-Befüllen nach Kriegsbeginn — beides Zustände, die sich nicht wiederholen. "
+  "2022/23 war das Notfall-Befüllen nach Kriegsbeginn - beides Zustände, die sich nicht wiederholen. "
   "Ich habe nachgerechnet, wie groß der Unterschied tatsächlich ist, statt ihn zu behaupten:", P)]
 
 s += [tabelle(["Kennzahl", f"alt: {', '.join(f'{y}/{str(y+1)[2:]}' for y in ALT)}",
                f"neu: {', '.join(f'{y}/{str(y+1)[2:]}' for y in MODERN)}", "Unterschied"],
   [["Faktor September", n2(monat(IDX_ALT,9)), n2(monat(IDX,9)), f"{n2(monat(IDX,9)-monat(IDX_ALT,9))}"],
    ["Faktor Dezember", n2(monat(IDX_ALT,12)), n2(monat(IDX,12)), f"{n2(monat(IDX,12)-monat(IDX_ALT,12))}"],
-   ["Fensterfaktor bis 1.11.", n3(FENSTER_ALT), n3(FENSTER), f"{n3(FENSTER-FENSTER_ALT)}"],
+   [f"Fensterfaktor bis {ZIEL_D.strftime('%d.%m.')}", n3(FENSTER_ALT), n3(FENSTER), f"{n3(FENSTER-FENSTER_ALT)}"],
    ["Rohmittel GWh/Tag", n0(ROH_ALT), n0(ROH), f"{n0(ROH-ROH_ALT)}"]],
   [W*0.28, W*0.22, W*0.22, W*0.28], rechts=(1,2,3))]
 
 s += [Spacer(1, 5), Paragraph(
-  f"<b>Ehrliches Zwischenergebnis:</b> an der <i>Form</i> ändert die Einschränkung wenig — der "
+  f"<b>Ehrliches Zwischenergebnis:</b> an der <i>Form</i> ändert die Einschränkung wenig - der "
   f"September liegt in beiden Regimen bei {n2(monat(IDX_ALT,9))} gegenüber {n2(monat(IDX,9))}, der "
   f"Fensterfaktor bei {n3(FENSTER_ALT)} gegenüber {n3(FENSTER)}. Deutlich verschieden ist das "
-  f"<i>Niveau</i> ({n0(ROH_ALT)} gegenüber {n0(ROH)} GWh/Tag) — und das fällt beim Normieren "
+  f"<i>Niveau</i> ({n0(ROH_ALT)} gegenüber {n0(ROH)} GWh/Tag) - und das fällt beim Normieren "
   f"ohnehin heraus. Die Einschränkung bleibt trotzdem, weil das Notfalljahr kein wiederholbares "
   f"Verhalten abbildet. Aber wer sie für falsch hält, ändert am Ergebnis kaum etwas: der "
   f"Fensterfaktor bewegt sich um {n1(abs(FENSTER-FENSTER_ALT)/FENSTER*100)} Prozent.", P)]
 
 s += [Spacer(1, 3), kasten("Die eine Annahme in diesem Abschnitt",
   "Abgeleitet wird ein <b>Gesamt</b>-Jahresgang. Dass er sich gleichmäßig auf Pipeline, LNG und "
-  "Inland verteilt, ist eine Modellannahme — THE und GIE veröffentlichen nur die Summe, nicht den "
+  "Inland verteilt, ist eine Modellannahme - THE und GIE veröffentlichen nur die Summe, nicht den "
   "Jahresgang je Quelle. Für den Füllstandspfad ist das ohne Belang, weil nur die Summe in die "
   "Bilanz eingeht. Es betrifft allein die Beschriftung der drei Karten.",
   colors.HexColor("#a2660b"))]
@@ -514,40 +532,43 @@ s += [Spacer(1, 3), kasten("Die eine Annahme in diesem Abschnitt",
 # =============================================================== 6 Robustheit
 s += [PageBreak(), Paragraph("6 · Wie stark hängt das Ergebnis am gewählten Jahr?", H2), Paragraph(
   "Der berechtigtste Angriff auf diese Darstellung lautet: „Ihr habt euch das Verbrauchsjahr "
-  "ausgesucht, das euch passt.“ Deshalb hier die vollständige Tabelle — dasselbe Rechenverfahren, "
+  "ausgesucht, das euch passt.“ Deshalb hier die vollständige Tabelle - dasselbe Rechenverfahren, "
   "einmal je verfügbarem Referenzjahr, jeweils mit dem Ist-Zufluss dieses Jahres.", P)]
 
-s += [tabelle(["Referenz-Gasjahr", "DWD-Winter", "Ist-Zufluss am Datenstand", "nötiger Tagesschnitt bis 1.11.",
-               "Projektion am 1.11."],
+s += [tabelle(["Referenz-Gasjahr", "DWD-Winter", "Ist-Zufluss am Datenstand", f"nötiger Tagesschnitt bis {ZIEL_D.strftime('%d.%m.')}",
+               f"Projektion am {ZIEL_D.strftime('%d.%m.')}"],
   [[f"{j['y']}/{str(j['y']+1)[2:]}",
-    f"{n2(DWD[j['y']+1])} °C" if j['y']+1 in DWD else "—",
+    f"{n2(DWD[j['y']+1])} °C" if j['y']+1 in DWD else "-",
     f"{n0(j['ist'])} GWh/Tag", f"{n0(j['schnitt'])} GWh/Tag", f"{n1(j['proj'])} %"] for j in jahrestab],
   [W*0.20, W*0.15, W*0.24, W*0.24, W*0.17], rechts=(1,2,3,4))]
 
-spanne_s = [j["schnitt"] for j in jahrestab]
+spanne_s = [j["schnitt"] for j in jahrestab if j["schnitt"] is not None]
 spanne_p = [j["proj"] for j in jahrestab]
+erreicht = sum(p >= ZIEL_F for p in spanne_p)
 s += [Spacer(1, 5), Paragraph(
-  f"Der nötige Tagesschnitt bewegt sich zwischen {n0(min(spanne_s))} und {n0(max(spanne_s))} GWh/Tag — "
-  f"eine Spanne von {n1((max(spanne_s)-min(spanne_s))/min(spanne_s)*100)} Prozent über fünf reale "
+  (f"Der nötige Tagesschnitt bewegt sich zwischen {n0(min(spanne_s))} und {n0(max(spanne_s))} GWh/Tag "
+   if spanne_s else "Der Prüfpunkt ist in keinem Referenzjahr mit der Einspeicherkapazität erreichbar. ") +
+  f"über {len(jahrestab)} reale "
   f"Winter, vom mildesten ({n2(max(DWD[j['y']+1] for j in jahrestab if j['y']+1 in DWD))} °C) bis zum "
   f"kältesten ({n2(min(DWD[j['y']+1] for j in jahrestab if j['y']+1 in DWD))} °C). Die Projektion am "
-  f"1. November liegt in jedem Fall zwischen {n1(min(spanne_p))} % und {n1(max(spanne_p))} % — "
-  f"<b>in keinem einzigen Referenzjahr wird das 80-Prozent-Ziel mit dem aktuellen Zufluss erreicht</b>. "
-  f"Die Aussage der Grafik hängt also nicht an der Wahl des Jahres.", P)]
+  f"{ZIEL_D.strftime('%d.%m.%Y')} liegt zwischen {n1(min(spanne_p))} % und {n1(max(spanne_p))} %. "
+  f"<b>In {erreicht} von {len(jahrestab)} Referenzjahren bleibt der Füllstand mit dem jeweils "
+  f"initialisierten Zufluss bei mindestens {n0(ZIEL_F)} %.</b> Diese Zählung wird bei jedem Bau "
+  f"aus den Daten neu bestimmt.", P)]
 
 s += [Spacer(1, 3), kasten("Die härteste Einschränkung dieses Modells",
   f"Seit Beginn der THE-Veröffentlichung war <b>jeder</b> deutsche Winter mild bis normal. Der "
   f"kälteste verfügbare ist {min((DWD[j['y']+1], j['y']) for j in jahrestab if j['y']+1 in DWD)[1]}/"
   f"{str(min((DWD[j['y']+1], j['y']) for j in jahrestab if j['y']+1 in DWD)[1]+1)[2:]} mit "
-  f"{n2(min(DWD[j['y']+1] for j in jahrestab if j['y']+1 in DWD))} °C — die DWD-Normalperiode "
-  f"1991–2020 liegt bei +1,4 °C, und einzelne Jahre lagen schon bei −2,3 °C. <b>Ein echter "
+  f"{n2(min(DWD[j['y']+1] for j in jahrestab if j['y']+1 in DWD))} °C - die DWD-Normalperiode "
+  f"1991-2020 liegt bei +1,4 °C, und einzelne Jahre lagen schon bei -2,3 °C. <b>Ein echter "
   f"Kältewinter lässt sich aus diesen Messwerten nicht nachstellen.</b> Alle Zahlen dieser Seite "
   f"sind deshalb eher die optimistische als die pessimistische Seite der Verteilung.",
   colors.HexColor("#a2660b"))]
 
 # =============================================================== 7 Annahmen
 s += [Spacer(1, 8), Paragraph("7 · Alle Annahmen an einer Stelle", H2), Paragraph(
-  "Was in dieser Darstellung <i>nicht</i> gemessen ist — vollständig, mit Wirkung:", P)]
+  "Was in dieser Darstellung <i>nicht</i> gemessen ist - vollständig, mit Wirkung:", P)]
 
 s += [tabelle(["Annahme", "Wert", "Begründung", "Wirkung auf den Füllstandspfad"],
   [["Aufteilung RLM auf Industrie und Stromerzeugung", "70 : 30",
@@ -560,7 +581,7 @@ s += [tabelle(["Annahme", "Wert", "Begründung", "Wirkung auf den Füllstandspfa
     "THE und GIE veröffentlichen nur den Gesamtzufluss",
     "<b>keine.</b> Betrifft nur die Beschriftung"],
    ["Reglerobergrenze Pipeline", "3.000 GWh/Tag",
-    "keine amtliche Gesamtkapazität aller Einspeisepunkte veröffentlicht — Modellgrenze",
+    "keine amtliche Gesamtkapazität aller Einspeisepunkte veröffentlicht - Modellgrenze",
     "begrenzt nur, wie weit man den Regler ziehen kann"],
    ["Reglerobergrenze LNG", "400 GWh/Tag",
     "13,1 Mrd. m³/Jahr Nennkapazität der drei DET-Terminals („bis zu“-Angabe)",
@@ -570,19 +591,23 @@ s += [tabelle(["Annahme", "Wert", "Begründung", "Wirkung auf den Füllstandspfa
     "dito"]],
   [W*0.21, W*0.145, W*0.345, W*0.30])]
 
-# =============================================================== 8 Das 80%-Ziel
-s += [PageBreak(), Paragraph("8 · Zur 80-Prozent-Linie", H2), kasten(
+# =============================================================== 8 Saisonale Ziele
+s += [PageBreak(), Paragraph("8 · Die saisonalen Vergleichsmarken", H2), Paragraph(
+  "Die Darstellung wechselt am 1. November zur Mindestreserve von 20 % zum 1. März und am "
+  "1. März zur 80-%-Marke zum 1. November. Beide Prüfungen verwenden „größer oder gleich“. "
+  "Die Mindestreserve von 20 % ist ein Planungsziel des Cockpits. Bei der Sommermarke müssen "
+  "die unterschiedlichen gesetzlichen Vorgaben für die einzelnen Speicher beachtet werden.", P), kasten(
   "Die 80 % sind eine Bezugsmarke, keine Rechtsvorgabe für den Gesamtfüllstand",
   "Die deutsche Gasspeicherfüllstandsverordnung vom 05.05.2025 schreibt zum 1.&nbsp;November <b>80 % für "
   "Kavernenspeicher und vier süddeutsche Porenspeicher</b> (Bierwang, Breitbrunn, Inzenham-West, "
   "Wolfersberg) vor, aber nur <b>45 % für alle übrigen Porenspeicher</b>. Der VKU rechnet daraus einen "
   "deutschen Gesamtdurchschnitt von rund 70 %. Die Verordnung (EU) 2025/1733 vom 18.07.2025 nennt "
-  "90 % — aber nicht zu einem festen Stichtag, sondern <b>zu einem beliebigen Zeitpunkt zwischen dem "
-  "1.&nbsp;Oktober und dem 1.&nbsp;Dezember</b> — und lässt Abweichungen von zusammen bis zu "
+  "90 % - aber nicht zu einem festen Stichtag, sondern <b>zu einem beliebigen Zeitpunkt zwischen dem "
+  "1.&nbsp;Oktober und dem 1.&nbsp;Dezember</b> - und lässt Abweichungen von zusammen bis zu "
   "<b>20 Prozentpunkten</b> zu (10 bei erschwerten Befüllbedingungen, je 5 weitere unter "
   "zusätzlichen Voraussetzungen). Eine auf den deutschen Gesamtfüllstand anwendbare 80-Prozent-Pflicht "
   "gibt es demnach nicht. Wer diese Grafik zitiert, sollte die Linie als das benennen, was sie ist: "
-  "eine gut begründete Vergleichsmarke. <b>Diese Zusammenfassung ist keine Rechtsberatung</b> — für "
+  "eine gut begründete Vergleichsmarke. <b>Diese Zusammenfassung ist keine Rechtsberatung</b> - für "
   "belastbare Aussagen ist der Verordnungstext selbst maßgeblich.",
   colors.HexColor("#a2660b"))]
 
@@ -608,7 +633,7 @@ QUELLEN = [
   ("EU-Füllstandsvorgaben",
    "Verordnung (EU) 2025/1733 vom 18.07.2025 zur Änderung der Verordnung (EU) 2017/1938",
    "eur-lex.europa.eu/eli/reg/2025/1733/oj"),
-  ("Wintertemperaturen Deutschland (Gebietsmittel Dez–Feb), Normalperiode 1991–2020",
+  ("Wintertemperaturen Deutschland (Gebietsmittel Dez-Feb), Normalperiode 1991-2020",
    "Deutscher Wetterdienst, Climate Data Center",
    "opendata.dwd.de/climate_environment/CDC/regional_averages_DE/seasonal/air_temperature_mean/"),
 ]
@@ -630,7 +655,7 @@ s += [Spacer(1, 8), KeepTogether([Paragraph("Wie sich das alles nachprüfen läs
 
 s += [Spacer(1, 10), Paragraph(
   "Fehler in diesem Dokument sind Fehler, die korrigiert gehören. Wer einen findet, möge ein Issue im "
-  "Repository eröffnen — mit Quelle.", PS)]
+  "Repository eröffnen - mit Quelle.", PS)]
 
 doc.build(s)
 print(f"{OUT} geschrieben")

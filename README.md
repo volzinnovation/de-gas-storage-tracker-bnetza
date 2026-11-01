@@ -91,28 +91,46 @@ Das Cockpit zeigt die EU- und Deutschland-Gasspeicherstände aus dem direkten
 [GIE AGSI+ API](https://agsi.gie.eu/)-Abruf. Die
 [Global-Energy-Flow-Trajektorie](https://global-energy-flow.com/storage/trajectory/)
 wird als Kontext- und Vergleichsquelle ausgewiesen.
-Die Projektion zum 1. November 2026 wird im Browser aus dem jüngsten verfügbaren
-Fenster berechnet: aktueller Füllstand plus durchschnittliche tägliche Änderung
-zwischen den Messpunkten innerhalb der letzten 30 Tage. Das Ziel ist der für 2026
-relaxte Wert von 80%. Der jüngste verfügbare GIE-Gastag kann gegenüber dem
+Die Projektion wird im Browser aus dem jüngsten verfügbaren Fenster berechnet:
+aktueller Füllstand plus durchschnittliche tägliche Änderung zwischen den
+Messpunkten innerhalb der letzten 30 Tage. Das heutige Datum in `Europe/Berlin`
+bestimmt das saisonale Planungsziel für alle Diagramme, Labore und Szenarien:
+vom 1. November bis Ende Februar mindestens **20% Reserve am nächsten 1. März**,
+vom 1. März bis Ende Oktober mindestens **80% Füllstand am 1. November**.
+Der Wechsel erfolgt an den beiden Stichtagen, auch wenn die Messreihe noch aus
+der vorherigen Saison stammt. Eine geöffnete Seite prüft den Wechsel jede Minute
+und beim Zurückkehren in den Browser. Der jüngste verfügbare GIE-Gastag kann gegenüber dem
 Kalendertag der Ausführung zeitverzögert sein; das Dashboard zeigt deshalb immer
 das tatsächliche Datenstand-Datum.
 
 Der deutsche Bereich verwendet dieselbe Darstellung: aktueller Füllstand,
 GIE-5-Jahres-Norm (Mittelwert desselben Kalendertags in den fünf Vorjahren),
-Abweichung zur Norm, 80%-Ziel und 30-Tage-Projektion. Die bisherigen BNetzA-
+Abweichung zur Norm, saisonales Mindestziel und 30-Tage-Projektion. Die bisherigen BNetzA-
 Projektionsläufe werden nur noch als separates Archiv angezeigt.
 
-Die automatischen Entnahme-Szenarien prüfen saisonal gegen 80% zum 1. November
-im Einspeicherfenster (1. März bis 1. November) und gegen 20% zum 1. März im
-Winterfenster (1. November bis 1. März).
+In beiden Saisons gilt das Ziel bei einem Füllstand **größer oder gleich** der
+Zielmarke als erreicht. Die 20% sind eine Mindestreserve, kein Entnahmeziel.
+Projektionen sind auf 0–100% begrenzt; am Zieltermin wird kein zusätzlicher
+Projektionstag erfunden. Kalendertage werden unabhängig von Zeitumstellungen
+berechnet. Die Diagramme zeigen das jüngste verfügbare Jahr.
 
-Im `Winterreserve-Labor` wird die erforderliche deutsche Tagesänderung bis zum
-80%-Ziel berechnet und auf dem Slider markiert. Zusätzlich zeigt ein zweiter Marker
-den technischen Einspeicherleistungs-Benchmark von 3.936,52 GWh/Tag aus einem
-AGSI+-Kapazitätssnapshot. Das ist eine technische Nennkapazität, keine Zusage für
+Im `Winterreserve-Labor` wird die mindestens erforderliche deutsche Tagesänderung
+bis zum saisonalen Ziel berechnet und auf dem Slider markiert. Eine negative
+Grenzrate im Winter bezeichnet die höchstens zulässige durchschnittliche Entnahme.
+Das Flussbilanz-Labor berechnet mit den Tagesverbräuchen den nötigen Zufluss,
+der die Mindestreserve zum Zieltermin erhält. Zusätzlich zeigt ein zweiter Marker
+die Einspeichergrenze: den kleineren Wert aus dem aktuellen GIE-Kapazitätswert
+und dem Benchmark von 3.936,52 GWh/Tag aus einem AGSI+-Kapazitätssnapshot,
+umgerechnet mit dem aktuellen Arbeitsgasvolumen. Das ist eine technische Nennkapazität, keine Zusage für
 aktuell verfügbare Leistung; Wartungen, Netzengpässe und Gasverfügbarkeit können
 die tatsächlich erreichbare Rate begrenzen.
+
+Regressionstests für Stichtage, Jahreswechsel, Berliner Mitternacht, Schaltjahre,
+Zeitumstellungen und die gemeinsamen Berechnungen:
+
+```bash
+node --test scripts/test_*.js
+```
 
 ## Output-Dateien
 

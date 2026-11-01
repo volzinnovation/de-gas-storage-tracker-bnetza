@@ -3,7 +3,7 @@
  *
  * Ergänzt das Winterreserve-Cockpit um eine interaktive Flussdarstellung.
  * Läuft eigenständig (IIFE, keine globalen Bindings) und liest dieselben
- * Datendateien wie dashboard.js. Die Ladereihenfolge ist damit egal.
+ * Datendateien wie dashboard.js. projection.js stellt die gemeinsame Saisonlogik bereit.
  *
  * Startwerte sind gemessen, nicht geraten:
  *   - Füllstand, Norm, Tagesverbrauch, Arbeitsgasvolumen und Ein-/Ausspeicher-
@@ -25,7 +25,7 @@
   const GIE_CSV_URL = "data/gie_storage.csv";
   const CAPACITY_URL = "data/de_storage_capacity.json";
   const CONSUMPTION_URL = "data/de_consumption_daily.csv";
-  const TARGET_FILL = 80;
+  const Projection = GasStorageProjection;
   const SEASON_END_MONTH_DAY = "03-31";
   const TREND_WINDOW_DAYS = 30;
   const PLAYBACK_MS = 220;   // ~50 s fuer die ganze Heizperiode, vorher war es unlesbar schnell
@@ -175,9 +175,8 @@
         "Ergebnis: Minimum <strong>0,72 am 14. September</strong>, Maximum " +
         "<strong>1,23 am 21. Dezember</strong>. Monatsmittel: Aug 0,83 · Sep 0,76 · " +
         "Okt 0,99 · Nov 1,18 · Dez 1,21 · Jan 1,04 · Feb 1,08 · Mär 1,13. " +
-        "Für das Einspeicherfenster bis zum 1. November ergibt das den Faktor " +
-        "<strong>0,87</strong> — das Fenster liegt im Zufluss-Tal, deshalb liegt das " +
-        "nötige Jahresniveau über dem nötigen Tagesschnitt.<br>" +
+        "Der mittlere Faktor im aktiven Zielfenster wird aus dessen Kalendertagen " +
+        "berechnet. Er übersetzt den nötigen Tagesschnitt in das einzustellende Jahresniveau.<br>" +
         "<strong>Warum nur Jahre ab 2023/24:</strong> davor lief Nord Stream " +
         "(2021/22) beziehungsweise das Notfall-Befüllen des Sommers 2022. Ehrlich " +
         "gesagt ändert die Einschränkung an der <em>Form</em> wenig — gepoolt liegt der " +
@@ -241,15 +240,14 @@
       quellen: [["Bundesnetzagentur, Gasversorgung 2024", "https://www.bundesnetzagentur.de/DE/Gasversorgung/a_Gasversorgung_2024/start.html"]],
     },
     ziel: {
-      titel: "Das 80-Prozent-Ziel",
+      titel: "Das saisonale Speicherziel",
       aktuell:
-        "Die Projektion rechnet den eingestellten Zufluss bis zum 1. November fort. " +
+        "Die Projektion rechnet den eingestellten Zufluss bis zum aktiven Zieltermin fort. " +
         "Voreingestellt ist der <strong>Ist-Zufluss</strong>: der gemessene Bedarf am " +
         "Datenstand plus das gemessene 30-Tage-Einspeichertempo. Die grüne Linie " +
         "daneben zeigt, wo der Speicher bei dem Zufluss läge, der das Ziel trägt. " +
-        "Hinter dem 1. November läuft sie mit demselben Zufluss weiter — das ist " +
-        "keine Prognose, sondern zeigt nur, was aus einem vollen Speicher über den " +
-        "Winter würde.",
+        "Die Simulation läuft anschließend mit demselben Zufluss bis zum Ende der " +
+        "Heizperiode weiter; der Zielpfad endet am Zieltermin.",
       maximum:
         "<strong>Vorsicht mit den 80 % als Rechtsvorgabe.</strong> Die deutsche " +
         "Gasspeicherfüllstandsverordnung vom 05.05.2025 schreibt zum 1. November 80 % für " +
@@ -260,7 +258,7 @@
         "Stichtag, sondern <strong>zu einem beliebigen Zeitpunkt zwischen dem 1. Oktober " +
         "und dem 1. Dezember</strong>, und lässt Abweichungen von <strong>zusammen bis zu " +
         "20 Prozentpunkten</strong> zu (10 bei erschwerten Befüllbedingungen, je 5 weitere " +
-        "unter zusätzlichen Voraussetzungen). Die 80 %-Linie in dieser Grafik ist deshalb " +
+        "unter zusätzlichen Voraussetzungen). Das sommerliche 80-%-Ziel des Cockpits ist deshalb " +
         "eine <strong>Bezugsmarke, kein auf den Gesamtfüllstand anwendbarer Grenzwert</strong>.",
       quellen: [
         ["VKU zu den Füllstandszielen nach EU-Trilog", "https://www.vku.de/themen/energiewende/artikel/nach-eu-trilog-die-fuellstandsziele-der-deutschen-gasspeicherfuellstandsverordnung-bleiben/"],
@@ -311,10 +309,11 @@
     withdrawalCapacity: DEFAULTS.withdrawalCapacity,
     consumptionTwh: DEFAULTS.consumptionTwh,
     measuredRate: DEFAULTS.rate,
-    seasonEnd: "2027-03-31",
+    seasonEnd: null,
     days: 0,
     targetIndex: 0,
-    targetDate: "2026-11-01",
+    targetDate: null,
+    target: Projection.seasonalTarget(),
     linearTarget: 0,
     day: 0,
     fills: [],
@@ -348,9 +347,11 @@
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
+    timeZone: "UTC",
   });
 
   function number(value) {
+    if (value === null || value === undefined || String(value).trim() === "") return null;
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : null;
   }
@@ -358,27 +359,23 @@
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
   const gwh = (value) => `${nf0.format(Math.round(value))} GWh/Tag`;
   const signed = (value, format) => `${value >= 0 ? "+" : "−"}${format(Math.abs(value))}`;
+  const meetsTarget = (fill) => fill >= state.target.fill - 1e-9;
 
-  /** Lokales ISO-Datum. Nicht toISOString() — das rechnet nach UTC und verschiebt den Tag. */
+  /** Kalenderarithmetik erfolgt in UTC; das heutige Datum kommt aus Europe/Berlin. */
   function isoDate(date) {
-    const month = String(date.getMonth() + 1).padStart(2, "0");
-    const day = String(date.getDate()).padStart(2, "0");
-    return `${date.getFullYear()}-${month}-${day}`;
+    return date.toISOString().slice(0, 10);
   }
 
-  const parseDate = (iso) => new Date(`${iso}T00:00:00`);
+  const parseDate = (iso) => new Date(`${iso}T00:00:00Z`);
   const dateText = (iso) => dateFormat.format(parseDate(iso));
 
   function shiftDate(iso, days) {
-    const date = parseDate(iso);
-    date.setDate(date.getDate() + days);
-    return date;
+    return parseDate(Projection.addDays(iso, days));
   }
 
   const dayDate = (index) => shiftDate(state.startDate, index);
   const dayIso = (index) => isoDate(dayDate(index));
-  const daysBetweenDates = (from, to) =>
-    Math.round((parseDate(to) - parseDate(from)) / 86400000);
+  const daysBetweenDates = Projection.daysBetweenDates;
 
 
   /* -------------------------------------------------------------------- Modell */
@@ -439,10 +436,10 @@
 
   /** Gasjahr laeuft von August bis Juli und wird nach dem Startjahr benannt. */
   const gasYearOf = (date) =>
-    date.getMonth() >= 7 ? date.getFullYear() : date.getFullYear() - 1;
+    date.getUTCMonth() >= 7 ? date.getUTCFullYear() : date.getUTCFullYear() - 1;
 
   const monthDay = (date) =>
-    `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+    `${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
 
   /**
    * Gemessener Verbrauch fuer den Kalendertag des Simulationstages, entnommen
@@ -502,31 +499,65 @@
     return fills;
   }
 
-  /** Zufluss, der ab dem gewählten Tag nötig wäre, um am 1. November 80% zu erreichen. */
-  function requiredSupply(fills) {
-    if (state.day >= state.targetIndex) return null;
-    const current = fills[state.day];
-    const days = state.targetIndex - state.day;
+  /** Endreserve bei einem Zufluss-Jahresniveau, mit denselben Grenzen wie simulate(). */
+  function reserveAtSupply(niveau, from, current, profile = null) {
+    for (let index = from; index < state.targetIndex; index += 1) {
+      const factor = profile ? profile[index - from].factor : inflowFactor(index);
+      const demand = profile ? profile[index - from].demand : demandOn(index).total;
+      const net = clamp(
+        niveau * factor - demand,
+        -state.withdrawalCapacity,
+        state.injectionCapacity,
+      );
+      current = clamp(current + net / state.ppGwh, 0, 100);
+    }
+    return current;
+  }
+
+  /** Kleinster Zufluss, der die saisonale Mindestreserve am Zieltag trägt. */
+  function supplyRequirement(from, current) {
+    const days = state.targetIndex - from;
+    if (days <= 0) return null;
     let demandSum = 0;
-    for (let index = state.day; index < state.targetIndex; index += 1) {
-      demandSum += demandOn(index).total;
-    }
-    const gapPp = Math.max(0, TARGET_FILL - current);
-    const perDayPp = gapPp / days;
     let faktorSumme = 0;
-    for (let index = state.day; index < state.targetIndex; index += 1) {
-      faktorSumme += inflowFactor(index);
+    let upper = 0;
+    const profile = [];
+    for (let index = from; index < state.targetIndex; index += 1) {
+      const demand = demandOn(index).total;
+      demandSum += demand;
+      const factor = inflowFactor(index);
+      profile.push({ demand, factor });
+      faktorSumme += factor;
+      upper = Math.max(upper, (demand + state.injectionCapacity) / factor);
     }
-    const schnitt = demandSum / days + perDayPp * state.ppGwh;
-    const faktor = days > 0 ? faktorSumme / days : 1;
+    const factor = faktorSumme / days;
+    const perDayPp = (state.target.fill - current) / days;
+    const reserve = (niveau) => reserveAtSupply(niveau, from, current, profile);
+    const feasible = meetsTarget(reserve(upper));
+    let lower = 0;
+    if (meetsTarget(reserve(0))) {
+      upper = 0;
+    } else if (feasible) {
+      // Monoton im Zufluss. Eine einfache Mengenbilanz wuerde Ueberlaeufe
+      // bei 100% und begrenzte Ein-/Ausspeicherung uebersehen.
+      for (let iteration = 0; iteration < 45; iteration += 1) {
+        const middle = (lower + upper) / 2;
+        if (meetsTarget(reserve(middle))) upper = middle;
+        else lower = middle;
+      }
+    }
     return {
-      met: current >= TARGET_FILL,
       pp: perDayPp,
-      gwh: schnitt,                       // noetiger Tagesschnitt im Fenster
-      niveau: faktor > 0 ? schnitt / faktor : schnitt,   // noetiges Jahresniveau
-      faktor,
-      feasible: perDayPp * state.ppGwh <= state.injectionCapacity,
+      gwh: upper * factor,
+      niveau: upper,
+      faktor: factor,
+      feasible,
+      demand: demandSum / days,
     };
+  }
+
+  function requiredSupply(fills) {
+    return supplyRequirement(state.day, fills[state.day]);
   }
 
   /* ---------------------------------------------------------------- Gasflasche */
@@ -551,11 +582,12 @@
     el("flow-bottle-norm-value").setAttribute("y", normY + 11);
     el("flow-bottle-norm-value").textContent = `≈${nf1.format(state.norm)}%`;
 
-    const targetY = bottleY(TARGET_FILL);
+    const targetY = bottleY(state.target.fill);
     el("flow-bottle-target").setAttribute("y1", targetY);
     el("flow-bottle-target").setAttribute("y2", targetY);
     const targetLabel = el("flow-bottle-target-label");
     targetLabel.setAttribute("y", targetY - 9);
+    targetLabel.textContent = `${state.target.label} · ${state.target.season === "winter" ? "Minimum" : "Ziel"} ${state.target.shortDate}`;
 
     // Der Knopf wandert mit der Ziellinie und haengt sich an das gemessene
     // Textende — feste Koordinaten wuerden bei anderer Schrift verrutschen.
@@ -660,33 +692,34 @@
   const AXIS_TICK = { top: 158, week: 164, month: 172, label: 190 };
   const MONTHS = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
 
-  const axisX = (index) => AXIS.x0 + (index / state.days) * (AXIS.x1 - AXIS.x0);
+  const axisX = (index) => AXIS.x0 + (index / Math.max(state.days, 1)) * (AXIS.x1 - AXIS.x0);
   const axisY = (value) =>
     AXIS.bottom - (clamp(value, 0, 100) / 100) * (AXIS.bottom - AXIS.top);
 
   function renderAxisScale() {
-    const targetY = axisY(TARGET_FILL);
+    const targetY = axisY(state.target.fill);
     el("flow-axis-target").setAttribute("y1", targetY);
     el("flow-axis-target").setAttribute("y2", targetY);
     el("flow-axis-target-label").setAttribute("y", targetY - 5);
+    el("flow-axis-target-label").textContent = `${state.target.label}${state.target.season === "winter" ? " Minimum" : ""}`;
 
     let markup = "";
     for (let index = 0; index <= state.days; index += 1) {
       const date = dayDate(index);
       const x = axisX(index).toFixed(1);
-      if (date.getDay() === 1) {
+      if (date.getUTCDay() === 1) {
         markup += `<line class="flow-axis-week" x1="${x}" y1="${AXIS_TICK.top}" x2="${x}" y2="${AXIS_TICK.week}"></line>`;
       }
-      if (date.getDate() !== 1) continue;
+      if (date.getUTCDate() !== 1) continue;
       const isTarget = index === state.targetIndex;
       markup += `<line class="flow-axis-month${isTarget ? " is-target" : ""}" x1="${x}" y1="${AXIS_TICK.top}" x2="${x}" y2="${AXIS_TICK.month}"></line>`;
       if (isTarget) {
-        markup += `<text class="flow-axis-target-text" x="${x}" y="10" text-anchor="middle">1. Nov · Ziel</text>`;
+        markup += `<text class="flow-axis-target-text" x="${x}" y="10" text-anchor="middle">${state.target.shortDate} · ${state.target.season === "winter" ? "Minimum" : "Ziel"}</text>`;
       }
-      const next = new Date(date.getFullYear(), date.getMonth() + 1, 1);
+      const next = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1));
       const endIndex = Math.min(state.days, daysBetweenDates(state.startDate, isoDate(next)));
       const midX = ((axisX(index) + axisX(endIndex)) / 2).toFixed(1);
-      markup += `<text class="flow-axis-label" x="${midX}" y="${AXIS_TICK.label}" text-anchor="middle">${MONTHS[date.getMonth()]}</text>`;
+      markup += `<text class="flow-axis-label" x="${midX}" y="${AXIS_TICK.label}" text-anchor="middle">${MONTHS[date.getUTCMonth()]}</text>`;
     }
     el("flow-axis-scale").innerHTML = markup;
   }
@@ -706,7 +739,7 @@
     }
     el("flow-axis-linear").setAttribute("d", path);
 
-    // Rechts neben dem Endpunkt, mittig zur Linie: haelt Abstand zur 80%-Marke
+    // Rechts neben dem Endpunkt, mittig zur Linie: haelt Abstand zur Zielmarke
     // oberhalb und zur Simulationskurve unterhalb.
     const label = el("flow-axis-linear-label");
     label.setAttribute("x", (axisX(state.targetIndex) + 8).toFixed(1));
@@ -716,14 +749,14 @@
 
   /**
    * Zweite Kurve: derselbe Bedarf, aber Zufluss auf Zielniveau.
-   * Endet am 1. November. Danach ist der Zielpfad nicht definiert — er wuerde
-   * nur zeigen, was ein Weiterpumpen auf Zielniveau im Winter anrichtet, und
-   * das hat mit dem Ziel nichts mehr zu tun.
+   * Endet am saisonalen Zieltermin. Im Winter ist dies der kleinste Zufluss,
+   * der die Mindestreserve traegt; vorhandene Reserve darf entnommen werden.
    */
   function renderTargetPath() {
     const pfad = el("flow-axis-goal");
     if (!pfad) return;
-    const niveau = zielZufluss();
+    const requirement = supplyRequirement(0, state.startFill);
+    const niveau = requirement?.niveau ?? 0;
     let fill = state.startFill;
     let d = `M${axisX(0).toFixed(1)},${axisY(fill).toFixed(1)}`;
     for (let index = 0; index < state.targetIndex; index += 1) {
@@ -740,9 +773,10 @@
     const label = el("flow-axis-goal-label");
     if (!label) return;
     label.setAttribute("x", (axisX(state.targetIndex) + 8).toFixed(1));
-    // Ueber die 80-%-Linie, sonst liegt die Schrift auf der gestrichelten Marke.
-    label.setAttribute("y", (axisY(TARGET_FILL) - 9).toFixed(1));
-    label.textContent = `Zielpfad · Ø ${nf0.format(Math.round(zielSchnitt()))} GWh/Tag bis 1. Nov`;
+    label.setAttribute("y", (axisY(state.target.fill) - 9).toFixed(1));
+    label.textContent = requirement && !requirement.feasible
+      ? `Kapazitätsgrenze · ${state.target.label} nicht erreichbar`
+      : `${state.target.season === "winter" ? "Reservepfad" : "Zielpfad"} · Ø ${nf0.format(Math.round(requirement?.gwh ?? 0))} GWh/Tag bis ${state.target.shortDate}`;
   }
 
   function renderAxisCurve(fills) {
@@ -806,19 +840,19 @@
       `${signed(net / state.ppGwh, (value) => nf2.format(value))} pp/Tag`;
 
     const projected = fills[state.targetIndex];
-    const gap = TARGET_FILL - projected;
+    const gap = state.target.fill - projected;
     el("flow-projection").textContent = `≈${nf1.format(projected)}%`;
     const detail = el("flow-projection-detail");
-    if (gap > 0.05) {
+    if (!meetsTarget(projected)) {
       detail.dataset.tone = "warn";
       detail.textContent =
-        `${nf1.format(gap)} pp unter dem 80%-Ziel · linear ≈${nf1.format(state.linearTarget)}%`;
+        `${nf1.format(gap)} pp unter ${state.target.label}${state.target.season === "winter" ? " Mindestreserve" : " Ziel"} · linear ≈${nf1.format(state.linearTarget)}%`;
     } else if (gap >= -0.05) {
       detail.dataset.tone = "ok";
-      detail.textContent = "80%-Ziel punktgenau erreicht";
+      detail.textContent = `${state.target.label}${state.target.season === "winter" ? " Mindestreserve" : " Ziel"} punktgenau erreicht`;
     } else {
       detail.dataset.tone = "ok";
-      detail.textContent = `Ziel erreicht · ${signed(-gap, (value) => nf1.format(value))} pp Puffer`;
+      detail.textContent = `${state.target.season === "winter" ? "Mindestreserve gesichert" : "Ziel erreicht"} · ${signed(-gap, (value) => nf1.format(value))} pp Puffer`;
     }
   }
 
@@ -831,68 +865,59 @@
 
     const luecke0 = el("flow-required-gap");
     if (!required) {
-      value.dataset.tone = "";
-      // Hinter dem Zieltag gibt es keinen "benoetigten Zufluss" mehr. Statt
-      // eines Gedankenstrichs unter einer stehengebliebenen Ueberschrift sagt
-      // die Kachel dann, was tatsaechlich gilt.
-      if (kopf) kopf.innerHTML = `${marke}Nach dem 1. November`;
-      value.textContent = "Winterentnahme";
+      const met = meetsTarget(fills[state.targetIndex]);
+      value.dataset.tone = met ? "ok" : "warn";
+      if (kopf) kopf.innerHTML = `${marke}Zielprüfung am ${dateText(state.targetDate)}`;
+      value.textContent = met ? "Mindestfüllstand erreicht" : "Mindestfüllstand verfehlt";
       if (luecke0) { luecke0.textContent = ""; luecke0.dataset.tone = ""; }
       detail.textContent =
-        "Das Einspeicherfenster ist geschlossen; ab hier zählt, wie weit die " +
-        "gemessene Entnahme des Referenzjahres den Speicher leert.";
+        `Am Zieltag ${dateText(state.targetDate)} liegen ${nf2.format(fills[state.targetIndex])}% ` +
+        `vor; erforderlich sind mindestens ${state.target.label}. Für diesen Termin ` +
+        `gibt es ab dem gewählten Simulationstag keinen verbleibenden Zuflusszeitraum.`;
       return;
     }
-    if (kopf) kopf.innerHTML = `${marke}Benötigter täglicher Zufluss bis 80% am 1. November`;
-    if (required.met) {
-      value.dataset.tone = "ok";
-      value.textContent = "Ziel erreicht";
-      if (luecke0) { luecke0.textContent = ""; luecke0.dataset.tone = ""; }
-      detail.textContent = `Der simulierte Füllstand liegt am ${dateText(dayIso(state.day))} bereits bei mindestens 80%.`;
-      return;
-    }
+    if (kopf) kopf.innerHTML = `${marke}Benötigter täglicher Zufluss für mindestens ${state.target.label} am ${state.target.shortDate}`;
 
     // Vergleich auf Ebene des Fensterschnitts: das ist die Zahl, die man
     // als "so viel muss taeglich kommen" lesen kann.
     const current = supplyTotal() * required.faktor;
     const gap = required.gwh - current;
-    value.dataset.tone = gap > 0 ? "warn" : "ok";
-    value.textContent = `≈${gwh(required.gwh)}`;
+    value.dataset.tone = !required.feasible || gap > 0 ? "warn" : "ok";
+    value.textContent = required.feasible ? `≈${gwh(required.gwh)}` : "Technisch nicht erreichbar";
 
     const luecke = el("flow-required-gap");
     if (luecke) {
-      luecke.dataset.tone = gap > 0 ? "warn" : "ok";
-      luecke.textContent = gap > 0
+      luecke.dataset.tone = !required.feasible || gap > 0 ? "warn" : "ok";
+      luecke.textContent = !required.feasible ? "Kapazitätsgrenze" : gap > 0
         ? `Lücke ${gwh(gap)}`
         : `Überschuss ${gwh(-gap)}`;
     }
     // Die Tageszahl ist die Restlaufzeit ab dem eingestellten Tag, nicht die
     // Fensterlaenge — sonst steht am 27. Oktober immer noch "75 Tage".
-    const restTage = Math.max(1, state.targetIndex - state.day);
+    const restTage = state.targetIndex - state.day;
 
     // Die grosse Zahl daneben ist ein TAGESWERT. Das Wort "Luecke" legt aber
     // die Gesamtmenge nahe, und die ist die Zahl, die man zitiert. Deshalb
-    // steht hier beides: Tagesluecke x Resttage = fehlende Arbeitsgasmenge,
-    // umgerechnet in Prozentpunkte Fuellstand.
+    // steht hier beides. Der Speicherwert ist nur ein Mengen-Aequivalent:
+    // Kapazitaetsgrenzen und Ueberlaeufe machen den Ist-Pfad nichtlinear.
     const summe = Math.abs(gap) * restTage;
     const summePp = state.ppGwh > 0 ? summe / state.ppGwh : 0;
     const summeText = summe >= 1000
       ? `${nf1.format(summe / 1000)} TWh`
       : `${nf0.format(Math.round(summe))} GWh`;
-    const bilanz = gap > 0
-      ? `zusammen fehlen ${summeText}, das sind ${nf1.format(summePp)} Prozentpunkte Füllstand`
-      : `zusammen ${summeText} Überschuss, das sind ${nf1.format(summePp)} Prozentpunkte Füllstand`;
+    const bilanz = `${summeText} ${gap > 0 ? "Zuflusslücke" : "Zuflusspuffer"} im Restfenster ` +
+      `(Speicheräquivalent ${nf1.format(summePp)} pp vor Kapazitäts- und Füllstandsgrenzen)`;
 
     detail.textContent =
       `Ø über ${restTage === 1 ? "den letzten Tag" : `die ${nf0.format(restTage)} Tage`} bis zum Ziel, ` +
-      `entspricht +${nf2.format(required.pp)} pp/Tag · ` +
+      `nötige Nettoänderung mindestens ${signed(required.pp, (value) => nf2.format(value))} pp/Tag · ` +
       `eingestellt: ${nf0.format(Math.round(current))} GWh/Tag im selben Zeitraum · ` +
       `${bilanz} · ` +
       `nötiges Jahresniveau ${nf0.format(Math.round(required.niveau))} GWh/Tag, ` +
       // Ab Ende Oktober steigt der Jahresgang ueber 1 — dann ist "Tal" falsch.
       `weil das Restfenster ${required.faktor < 1 ? "im Zufluss-Tal" : "über dem Jahresmittel"} ` +
       `liegt (Faktor ${nf2.format(required.faktor)})` +
-      (required.feasible ? "" : " · über der technischen Einspeicherkapazität");
+      (required.feasible ? "" : " · das Ziel bleibt selbst bei voller Einspeicherkapazität unerreichbar");
   }
 
   function update() {
@@ -1044,7 +1069,8 @@
     const zufluss = supplyTotal();
     return [
       `# ${titel}`,
-      `# erzeugt am: ${dateText(isoDate(new Date()))}`,
+      `# erzeugt am: ${dateText(Projection.berlinDate())}`,
+      `# Saisonales Ziel: mindestens ${state.target.fill} % am ${state.targetDate}; Auswahl nach heutigem Datum (Europe/Berlin)`,
       `# Datenstand GIE AGSI+: ${state.startDate}, Fuellstand ${state.startFill} %`,
       `# Arbeitsgasvolumen: ${(state.ppGwh * 100) / 1000} TWh, 1 Prozentpunkt = ${state.ppGwh.toFixed(2)} GWh`,
       `# Einspeicherkapazitaet: ${state.injectionCapacity} GWh/Tag ` +
@@ -1143,10 +1169,12 @@
 
   /** Der laufende Durchgang: nur das gewaehlte Referenzjahr. */
   function buildCsv() {
+    const requirement = supplyRequirement(0, state.startFill);
     const kopf = csvKopf("Flussbilanz-Labor — Tagestabelle der Simulation", [
       `# Referenz-Gasjahr fuer den Verbrauch: ${state.refYear}/${String(state.refYear + 1).slice(2)}`,
       `# Zielpfad: ${zielSchnitt().toFixed(1)} GWh/Tag im Schnitt bis ${state.targetDate}` +
         `, entspricht einem Jahresmittel von ${zielZufluss().toFixed(1)} GWh/Tag`,
+      `# Ziel technisch erreichbar: ${requirement ? requirement.feasible ? "ja" : "nein" : meetsTarget(state.startFill) ? "ja, bereits am Zieltermin" : "nein, kein Restzeitraum"}`,
       `# gemessene Jahresmittel des Referenzjahres (Entnahme, nicht einstellbar): ` +
         `Haushalte ${state.base.households.toFixed(1)}, Industrie ${state.base.industry.toFixed(1)}, ` +
         `Strom ${state.base.power.toFixed(1)} GWh/Tag`,
@@ -1166,10 +1194,12 @@
     const bilanz = jahre.map((jahr) => {
       state.refYear = jahr;
       const tag0 = demandOn(0).total + state.measuredRate * state.ppGwh;
+      const requirement = supplyRequirement(0, state.startFill);
       const zeile =
         `#   ${jahr}/${String(jahr + 1).slice(2)}: Winter ${DWD_WINTER[jahr + 1] !== undefined ? `${DWD_WINTER[jahr + 1]} °C` : "unbekannt"}` +
         `, Ist-Zufluss am Datenstand ${tag0.toFixed(0)} GWh/Tag` +
-        `, noetiger Tagesschnitt bis zum Ziel ${zielSchnitt().toFixed(0)} GWh/Tag`;
+        `, noetiger Tagesschnitt bis zum Ziel ${zielSchnitt().toFixed(0)} GWh/Tag` +
+        `, Ziel technisch erreichbar: ${requirement ? requirement.feasible ? "ja" : "nein" : meetsTarget(state.startFill) ? "ja" : "nein"}`;
       return zeile;
     });
     state.refYear = merk;
@@ -1180,8 +1210,10 @@
       "# Spalte zufluss_gwh ist in allen Bloecken dieselbe (siehe oben). Der einzige",
       "# Unterschied zwischen den Jahren ist die gemessene Tagesreihe der Entnahme.",
       "# Die Spalte zielpfad_fuellstand_pct rechnet dagegen je Jahr mit dem Zufluss,",
-      "# den GERADE DIESES Jahr fuer 80 % braeuchte — sie endet deshalb in jedem",
-      "# Block bei 80,000 %. Die Spanne dieser noetigen Zufluesse steht unten.",
+      `# den GERADE DIESES Jahr fuer mindestens ${state.target.fill} % am ${state.targetDate} braeuchte.`,
+      "# Der Zielpfad beruecksichtigt Kapazitaetsgrenzen sowie 0..100 % Fuellstand.",
+      "# Bei unzureichender Einspeicherkapazitaet kann er unter dem Ziel enden;",
+      "# reicht die Anfangsreserve ohne Zufluss, kann er oberhalb des Ziels enden.",
       "#",
       "# Je Referenzjahr:",
       ...bilanz,
@@ -1435,9 +1467,8 @@
    * Regler auf den gemessenen Zustand setzen.
    *   Entnahme: Jahresmittel des Referenz-Gasjahres, SLP und RLM getrennt
    *             gemessen, RLM nach RLM_SPLIT auf Industrie und Strom verteilt.
-   *   Zufluss:  das Niveau, das am 1. November 80 % traegt (siehe requiredSupply).
-   *             Eingefroren auf den Augustwert waere die Voreinstellung ein
-   *             Szenario, das niemand faehrt — der Speicher kippte im September.
+   *   Zufluss:  gemessener Bedarf am Datenstand plus 30-Tage-Speicherrate,
+   *             umgerechnet auf das Jahresniveau der Zuflussregler.
    */
   function seedFromData() {
     const jahr = state.consumption.get(state.refYear);
@@ -1496,32 +1527,17 @@
     };
   }
 
-  /** Zufluss auf das Niveau heben, das bis zum 1. November für 80% nötig ist. */
-  /** Im Einspeicherfenster noetiger Zufluss — als Tagesschnitt, ab Tag 0. */
+  /** Mindestzufluss im saisonalen Zielfenster — als Tagesschnitt, ab Tag 0. */
   function zielSchnitt() {
-    let bedarf = 0;
-    for (let index = 0; index < state.targetIndex; index += 1) {
-      bedarf += demandOn(index).total;
-    }
-    const luecke = Math.max(0, TARGET_FILL - state.startFill);
-    return (bedarf + luecke * state.ppGwh) / state.targetIndex;
-  }
-
-  /** Mittlerer Jahresgang-Faktor ueber das Einspeicherfenster. */
-  function fensterFaktor() {
-    let summe = 0;
-    for (let index = 0; index < state.targetIndex; index += 1) summe += inflowFactor(index);
-    return state.targetIndex > 0 ? summe / state.targetIndex : 1;
+    return supplyRequirement(0, state.startFill)?.gwh ?? 0;
   }
 
   /**
    * Jahresniveau, das den noetigen Fensterschnitt traegt.
-   * Das Fenster liegt im Zufluss-Tal (Faktor rund 0,87), das noetige
-   * Jahresniveau liegt deshalb ueber dem Fensterschnitt.
+   * Saisonale Tagesfaktoren und technische Grenzen werden mitgerechnet.
    */
   function zielZufluss() {
-    const faktor = fensterFaktor();
-    return faktor > 0 ? zielSchnitt() / faktor : zielSchnitt();
+    return supplyRequirement(0, state.startFill)?.niveau ?? 0;
   }
 
   /** Beschreibt das gewaehlte Referenzjahr unter der Knopfleiste. */
@@ -1551,20 +1567,46 @@
     if (note) note.innerHTML = scenarioText();
   }
 
-  /** Horizont: bis zum nächsten 1. November und weiter bis zum Ende der Heizperiode. */
+  /** Ziel nach heutigem Berliner Datum; Messverzug verschiebt die Saison nicht. */
   function setHorizon() {
-    const start = parseDate(state.startDate);
-    const year = start <= parseDate(`${start.getFullYear()}-11-01`)
-      ? start.getFullYear()
-      : start.getFullYear() + 1;
-    state.targetDate = `${year}-11-01`;
-    state.seasonEnd = `${year + 1}-${SEASON_END_MONTH_DAY}`;
-    state.targetIndex = Math.max(1, daysBetweenDates(state.startDate, state.targetDate));
+    state.target = Projection.seasonalTarget();
+    state.targetDate = state.target.date;
+    const targetYear = Number(state.targetDate.slice(0, 4));
+    state.seasonEnd = `${targetYear + (state.target.season === "injection" ? 1 : 0)}-${SEASON_END_MONTH_DAY}`;
+    state.targetIndex = Math.max(0, daysBetweenDates(state.startDate, state.targetDate));
     state.days = Math.max(
-      state.targetIndex + 1,
+      state.targetIndex,
+      0,
       daysBetweenDates(state.startDate, state.seasonEnd),
     );
     el("flow-range").textContent = `${dateText(state.startDate)} – ${dateText(state.seasonEnd)}`;
+    state.day = clamp(state.day, 0, state.days);
+    const scrub = el("flow-scrub");
+    if (scrub) scrub.max = String(state.days);
+    renderTargetLabels();
+  }
+
+  function renderTargetLabels() {
+    const target = state.target;
+    const kind = target.season === "winter" ? "Mindestreserve" : "Füllziel";
+    el("flow-projection-heading").textContent = `${target.shortDate} · bei konstantem Zufluss`;
+    el("flow-projection-detail").textContent = `${kind}: mindestens ${target.label}`;
+    el("flow-target-legend").textContent = `${target.season === "winter" ? "Reservepfad" : "Zielpfad"} für mindestens ${target.label} am ${target.shortDate}`;
+    el("flow-bottle-desc").textContent = `Skala von 0 bis 100 Prozent mit saisonaler ${target.fill}-Prozent-Ziellinie und 5-Jahres-Norm; der Zahlenwert steht in der Flasche.`;
+    document.querySelectorAll('[data-info="ziel"]').forEach((button) => {
+      button.setAttribute("aria-label", `Quelle und Bedeutung: ${target.label} ${kind} am ${target.shortDate}`);
+    });
+    SOURCES.ziel.titel = `${target.label} ${kind} am ${target.shortDate}`;
+    SOURCES.ziel.aktuell =
+      `Ab 1. November gilt eine <strong>Mindestreserve von 20 % am nächsten 1. März</strong>; ` +
+      `ab 1. März das <strong>80-%-Füllziel am nächsten 1. November</strong>. ` +
+      `Die Auswahl folgt dem heutigen Datum in Europe/Berlin, auch bei verzögerten Messwerten. ` +
+      `Aktuell: mindestens ${target.label} am ${dateText(target.date)}. ` +
+      `Die Projektion verwendet den eingestellten Zufluss und die gemessene Tagesentnahme des Referenzjahres. ` +
+      `Der grüne ${target.season === "winter" ? "Reservepfad" : "Zielpfad"} zeigt den kleinsten ` +
+      `Zufluss, der diese Schwelle unter den technischen Grenzen am Zieltag hält. ` +
+      `Vorhandene Speicherreserve darf bis zur Schwelle verbraucht werden; ein höherer Endfüllstand erfüllt das Ziel ebenfalls. ` +
+      `Die 20 % sind die kritische Modellreserve dieses Cockpits und keine zusätzliche gesetzliche Füllvorgabe.`;
   }
 
   function renderSourceNote(loaded) {
@@ -1600,7 +1642,7 @@
         `${nf0.format(Math.round(state.ppGwh))} GWh, gedeckelt auf 0–100 %. ` +
         `Einstellbar ist nur der Zufluss; er startet auf dem gemessenen Ist-Niveau ` +
         `(Bedarf am Datenstand plus das 30-Tage-Einspeichertempo). Die grüne Linie zeigt ` +
-        `daneben den Zufluss, der das 80-%-Ziel trüge. ` +
+        `daneben den kleinsten Zufluss für mindestens ${state.target.label} am ${state.target.shortDate}. ` +
         `<strong>Als Annahme bleiben der Bezugsmix, die Aufteilung des Jahresgangs auf die ` +
         `drei Quellen und die Trennung 70/30 zwischen Industrie und Stromerzeugung</strong> ` +
         `— das <i>i</i> an jeder Karte nennt Herkunft und Grenzen.`
@@ -1637,12 +1679,12 @@
         <small id="flow-net-detail">Zufluss minus Entnahme</small>
       </div>
       <div class="flow-metric flow-metric-target">
-        <span><i class="flow-key flow-key-target"></i>1. Nov · bei konstantem Zufluss
+        <span><i class="flow-key flow-key-target"></i><span id="flow-projection-heading">Saisonale Projektion</span>
           <button class="flow-info" type="button" data-info="ziel"
-                  aria-label="Quelle und Bedeutung: 80-Prozent-Ziel">i</button>
+                  aria-label="Quelle und Bedeutung: saisonales Speicherziel">i</button>
         </span>
         <strong id="flow-projection">--</strong>
-        <small id="flow-projection-detail">Ziel: 80%</small>
+        <small id="flow-projection-detail">Saisonales Ziel wird geladen</small>
       </div>
     </div>
 
@@ -1685,7 +1727,7 @@
              aria-labelledby="flow-bottle-title flow-bottle-desc">
           <title id="flow-bottle-title">Speicherfüllstand als Gasflasche</title>
           <desc id="flow-bottle-desc">
-            Skala von 0 bis 100 Prozent mit 80-Prozent-Ziellinie und
+            Skala von 0 bis 100 Prozent mit saisonaler Ziellinie und
             5-Jahres-Norm; der Zahlenwert steht in der Flasche.
           </desc>
           <defs>
@@ -1719,7 +1761,7 @@
           <text id="flow-bottle-norm-value" class="flow-bottle-norm-label" x="234" y="171">≈--%</text>
 
           <line id="flow-bottle-target" class="flow-bottle-target" x1="62" y1="151" x2="228" y2="151"></line>
-          <text id="flow-bottle-target-label" class="flow-bottle-target-label" x="64" y="142">80% · Ziel 1. Nov</text>
+          <text id="flow-bottle-target-label" class="flow-bottle-target-label" x="64" y="142">Saisonales Ziel</text>
           <g id="flow-bottle-target-info" class="flow-info flow-info-svg" data-info="ziel"
              role="button" tabindex="0" transform="translate(180,138)"
              aria-label="Quelle und Einordnung: die gesetzlichen Füllstandsvorgaben">
@@ -1780,7 +1822,7 @@
 
       <p class="flow-timeline-legend">
         <i class="flow-key flow-key-fill"></i>Ist-Pfad, vom Zufluss gesteuert ·
-        <i class="flow-key flow-key-goal"></i>Zielpfad für 80 % am 1. Nov ·
+        <i class="flow-key flow-key-goal"></i><span id="flow-target-legend">Saisonaler Zielpfad</span> ·
         <i class="flow-key flow-key-linear"></i>lineare Fortschreibung ·
         <span id="flow-range">--</span>
       </p>
@@ -1789,7 +1831,7 @@
         <svg id="flow-axis" viewBox="0 0 960 200" role="img"
              aria-label="Zeitachse mit Wochen und Monaten sowie dem projizierten Füllstand">
           <line id="flow-axis-target" class="flow-axis-target" x1="16" y1="43" x2="944" y2="43"></line>
-          <text id="flow-axis-target-label" class="flow-axis-target-text" x="20" y="38">80%</text>
+          <text id="flow-axis-target-label" class="flow-axis-target-text" x="20" y="38">Ziel</text>
           <g id="flow-axis-scale"></g>
           <path id="flow-axis-linear" class="flow-axis-linear" d=""></path>
           <text id="flow-axis-linear-label" class="flow-axis-linear-label" x="0" y="0" dominant-baseline="central">linear</text>
@@ -1821,7 +1863,7 @@
 
     <div class="flow-foot flow-foot-single">
       <div class="flow-required">
-        <span id="flow-required-head"><i class="flow-key flow-key-in"></i>Benötigter täglicher Zufluss bis 80% am 1. November</span>
+        <span id="flow-required-head"><i class="flow-key flow-key-in"></i>Benötigter täglicher Zufluss bis zum saisonalen Ziel</span>
         <p class="flow-required-row">
           <strong id="flow-required-value">--</strong>
           <strong id="flow-required-gap" class="flow-required-gap">--</strong>
@@ -1908,6 +1950,16 @@
       uebernehmeReglerwerte();
       renderSourceNote(loaded);
       update();
+      window.addEventListener("projection-target-change", () => {
+        stopPlayback();
+        setHorizon();
+        renderBottleScale();
+        renderAxisScale();
+        renderLinearReference();
+        applySliderPositions();
+        renderSourceNote(loaded);
+        update();
+      });
     } catch (error) {
       // Lieber eine ehrliche Fehlermeldung als eine Grafik voller Striche.
       console.error("Flow-Lab: Aufbau fehlgeschlagen.", error);

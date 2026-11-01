@@ -16,6 +16,7 @@ on:
       - "index.html"
       - "styles.css"
       - "dashboard.js"
+      - "projection.js"
       - "flowlab.js"
       - "flowlab.css"
       - "METHODIK.pdf"

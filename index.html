@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#0b3b3c" />
     <meta
       name="description"
-      content="Deutschland- und EU-Gasspeicherstände mit 30-Tage-Trend, 80%-Ziel zum 1. November und Projektion."
+      content="Deutschland- und EU-Gasspeicherstände mit saisonaler Projektion: mindestens 20% Winterreserve am 1. März und 80% Füllstand am 1. November."
     />
     <title>Gasspeicher Deutschland &amp; EU | Winterreserve Cockpit</title>
     <link rel="stylesheet" href="styles.css?v=20260820-eu-trajectory" />
@@ -19,7 +19,7 @@
           <p class="kicker">GIE AGSI+ · DEUTSCHLAND</p>
           <h1 id="title">Gasspeicher Deutschland</h1>
           <p class="lead">
-            Aktueller Speicherstand, 5-Jahres-Norm und 80%-Ziel auf Basis der
+            Aktueller Speicherstand, 5-Jahres-Norm und <span id="hero-target">saisonales Speicherziel</span> auf Basis der
             direkten GIE-AGSI+-Messreihe.
           </p>
           <div class="hero-actions">
@@ -68,11 +68,10 @@
         <div class="section-heading">
           <div>
             <p class="section-eyebrow">EUROPA · GIE AGSI+ AGGREGIERT</p>
-            <h2 id="eu-title">EU-Gasspeicher bis 1. November</h2>
+            <h2 id="eu-title">EU-Gasspeicher · saisonale Projektion</h2>
           </div>
-          <p>
-            Aktueller Füllstand, entspannter 80%-Zielwert und eine Fortschreibung
-            des jüngsten 30-Tage-Tempos.
+          <p id="eu-description">
+            Aktueller Füllstand, 5-Jahres-Norm und saisonale Fortschreibung des jüngsten 30-Tage-Tempos.
           </p>
         </div>
 
@@ -89,8 +88,8 @@
               <small id="eu-norm-gap">--</small>
             </div>
             <div class="eu-metric eu-metric-target">
-              <span><i class="metric-key metric-key-target"></i>1. November 2026</span>
-              <strong>80%</strong>
+              <span><i class="metric-key metric-key-target"></i><span id="eu-target-date">Saisonales Ziel</span></span>
+              <strong id="eu-target-fill">--</strong>
               <small id="eu-projection-status">Projektion wird geladen …</small>
             </div>
           </div>
@@ -100,7 +99,7 @@
               id="eu-chart"
               viewBox="0 0 960 360"
               role="img"
-              aria-label="EU-Gasspeicherfüllstand mit 80%-Ziel und Projektion bis 1. November 2026"
+              aria-label="EU-Gasspeicherfüllstand und saisonale Projektion"
             >
               <title>EU-Gasspeicherfüllstand und Projektion</title>
             </svg>
@@ -109,10 +108,10 @@
           <div class="eu-trajectory-footer">
             <span>
               Tempo im jüngsten Fenster: <strong id="eu-recent-rate">--</strong>
-              · erforderlich bis zum Ziel: <strong id="eu-required-rate">--</strong>
+              · mindestens bis zum Ziel: <strong id="eu-required-rate">--</strong>
             </span>
             <span>
-              Projektion am 1. November: <strong id="eu-projected-fill">--</strong>
+              <span id="eu-projected-label">Projektion am Zieltermin: </span><strong id="eu-projected-fill">--</strong>
             </span>
           </div>
           <p class="eu-source-note">
@@ -128,11 +127,10 @@
         <div class="section-heading">
           <div>
             <p class="section-eyebrow">DEUTSCHLAND · GIE AGSI+ AGGREGIERT</p>
-            <h2 id="de-title">Deutsche Gasspeicher bis 1. November</h2>
+            <h2 id="de-title">Deutsche Gasspeicher · saisonale Projektion</h2>
           </div>
-          <p>
-            Aktueller Füllstand, 5-Jahres-Norm und die Fortschreibung des
-            jüngsten 30-Tage-Tempos bis zum 80%-Ziel.
+          <p id="de-description">
+            Aktueller Füllstand, 5-Jahres-Norm und saisonale Fortschreibung des jüngsten 30-Tage-Tempos.
           </p>
         </div>
         <div class="eu-trajectory-panel">
@@ -148,10 +146,10 @@
               <small id="de-norm-gap">--</small>
             </div>
             <div class="eu-metric eu-metric-target">
-              <span><i class="metric-key metric-key-target"></i>1. November 2026</span>
-              <strong>80%</strong>
+              <span><i class="metric-key metric-key-target"></i><span id="de-target-date">Saisonales Ziel</span></span>
+              <strong id="de-target-fill">--</strong>
               <small id="de-projection-status">Projektion wird geladen …</small>
-              <p class="target-footnote">
+              <p id="de-november-footnote" class="target-footnote">
                 DE zum 1.11.: 80% für Kavernen- und vier süddeutsche Porenspeicher,
                 45% für die übrigen Porenspeicher
                 <a href="https://www.gesetze-im-internet.de/gasspf_llstv_2025/BJNR0820A0025.html" target="_blank" rel="noreferrer" aria-label="Quelle 1: Gasspeicherfüllstandsverordnung 2025">[1]</a>,
@@ -166,7 +164,7 @@
               id="de-chart"
               viewBox="0 0 960 360"
               role="img"
-              aria-label="Deutsche Gasspeicherfüllstand mit 80%-Ziel und Projektion bis 1. November 2026"
+              aria-label="Deutscher Gasspeicherfüllstand und saisonale Projektion"
             >
               <title>Deutsche Gasspeicherfüllstand und Projektion</title>
             </svg>
@@ -175,10 +173,10 @@
           <div class="eu-trajectory-footer">
             <span>
               Tempo im jüngsten Fenster: <strong id="de-recent-rate">--</strong>
-              · erforderlich bis zum Ziel: <strong id="de-required-rate">--</strong>
+              · mindestens bis zum Ziel: <strong id="de-required-rate">--</strong>
             </span>
             <span>
-              Projektion am 1. November: <strong id="de-projected-fill">--</strong>
+              <span id="de-projected-label">Projektion am Zieltermin: </span><strong id="de-projected-fill">--</strong>
             </span>
           </div>
           <p class="eu-source-note">
@@ -192,8 +190,8 @@
       <section id="scenario-lab" class="scenario-lab" aria-labelledby="lab-title">
         <div class="section-heading">
           <h2 id="lab-title">Winterreserve-Labor</h2>
-          <p>
-            Ziel: 80% Füllstand zum 1.11.2026. Ziehe die tägliche Änderung;
+          <p id="lab-description">
+            Ziel: saisonale Mindestreserve. Ziehe die tägliche Änderung;
             positive Werte füllen Speicher.
           </p>
         </div>
@@ -212,7 +210,7 @@
                 type="range"
                 min="-1.5"
                 max="1.642"
-                step="0.01"
+                step="any"
                 value="-0.32"
                 aria-describedby="target-rate-detail"
               />
@@ -235,7 +233,7 @@
       <section class="scenario-section" aria-labelledby="scenario-title">
         <div class="section-heading">
           <h2 id="scenario-title">Automatische Entnahme-Szenarien</h2>
-          <p>
+          <p id="scenario-description">
             Saisonale Zielprüfung: 80% bis 1. November und 20% bis 1. März;
             Raten aus dem getrennten BNetzA-Projektionsarchiv.
           </p>
@@ -262,7 +260,8 @@
       </footer>
     </main>
 
-    <script src="dashboard.js?v=20260820-eu-trajectory"></script>
-    <script src="flowlab.js?v=20260822-bilanz-8"></script>
+    <script src="projection.js?v=20261101-seasonal"></script>
+    <script src="dashboard.js?v=20261101-seasonal"></script>
+    <script src="flowlab.js?v=20261101-seasonal"></script>
   </body>
 </html>

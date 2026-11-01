@@ -13,6 +13,7 @@ REQUIRED_FILES = [
     ROOT / "index.html",
     ROOT / "styles.css",
     ROOT / "dashboard.js",
+    ROOT / "projection.js",
     ROOT / "data" / "projections.csv",
     ROOT / "data" / "eu_storage.csv",
     ROOT / "data" / "gie_storage.csv",
@@ -44,12 +45,16 @@ def main() -> int:
         "dashboard.js",
         "data/projections.csv",
         "Gasspeicher Deutschland",
-        "EU-Gasspeicher bis 1. November",
-        "Deutsche Gasspeicher bis 1. November",
+        'id="eu-target-date"',
+        'id="de-target-date"',
+        'id="eu-target-fill"',
+        'id="de-target-fill"',
         "Winterreserve-Labor",
         "Automatische Entnahme-Szenarien",
         "80% bis 1. November und 20% bis 1. März",
-        "80% Füllstand zum 1.11.2026",
+        'id="lab-description"',
+        'id="scenario-description"',
+        "projection.js",
         'id="eu-chart"',
         'id="copy-summary"',
         'id="copy-status"',
@@ -86,12 +91,19 @@ def main() -> int:
         "renderEuTrajectory",
         "renderDeTrajectory",
         "GIE_CSV_URL",
-        "EU_TARGET_FILL",
+        "GasStorageProjection",
+        "refreshSeasonalTarget",
         "targetProjection",
         "technical_max_injection_gwh_per_day",
     ):
         if expected not in dashboard_js:
             raise SystemExit(f"dashboard.js is missing {expected!r}")
+
+    # Shared calendar arithmetic must be loaded before either consumer.
+    if not index_html.index('src="projection.js') < min(
+        index_html.index('src="dashboard.js'), index_html.index('src="flowlab.js')
+    ):
+        raise SystemExit("projection.js must load before the dashboard and flow lab")
 
     with (ROOT / "data" / "projections.csv").open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
