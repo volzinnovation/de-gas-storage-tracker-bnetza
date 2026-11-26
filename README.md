@@ -32,7 +32,7 @@ python -m http.server 8765
 Stand aus `data/projections.csv`, letzter Lauf:
 
 ```text
-Projektion #Gasspeicher DE vom 2026-11-25
+Projektion #Gasspeicher DE vom 2026-11-26
 Fuellstand 55.9% am 2026-11-23
 Kritisches Minimum 20% (Entnahmerate bricht stark ein)
 
